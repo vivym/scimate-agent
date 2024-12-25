@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "scimate-agent"
+version = "0.1.0"
+description = "Agent for SciMate"
+authors = ["Ming Yang <ymviv@qq.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+cycler = "^0.12.1"
+ipykernel = "^8.31.0"
+langchain = "^0.3.13"
+langchain-anthropic = "^0.3.1"
+langchain-openai = "^0.2.14"
+langgraph = "^0.2.60"
+traitlets = "^5.14.3"
+typing-extensions = "^4.12.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

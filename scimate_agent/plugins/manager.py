@@ -1,0 +1,3 @@
+class FunctionManager:
+    def get_function_description_for_planner(self) -> str:
+        ...
