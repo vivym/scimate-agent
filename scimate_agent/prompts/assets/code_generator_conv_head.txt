@@ -1,0 +1,10 @@
+==============================
+## Conversation Start
+
+### Context Summary
+The context summary of previous rounds and the variables that {ROLE_NAME} can refer to:
+{SUMMARY}
+
+### Plugin Functions
+The functions can be directly called without importing:
+{PLUGINS}

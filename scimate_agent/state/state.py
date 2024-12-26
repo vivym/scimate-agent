@@ -13,6 +13,8 @@ class AgentState(BaseModel):
 
     planner_self_correction_count: int | None = None
 
+    code_generator_self_correction_count: int | None = None
+
     @classmethod
     def new_initial_state(
         cls,
@@ -22,7 +24,6 @@ class AgentState(BaseModel):
         return cls(
             rounds=[Round.new(user_query)],
             plugins=[] if plugins is None else plugins,
-            planner_self_correction_count=None,
         )
 
     def get_rounds(self, role: Role | None = None, include_failure_rounds: bool = False) -> list[Round]:

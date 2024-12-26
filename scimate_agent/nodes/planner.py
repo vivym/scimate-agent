@@ -8,7 +8,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.runnables.config import RunnableConfig
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
@@ -121,7 +121,7 @@ def format_messages(rounds: list[Round]) -> list[BaseMessage]:
     system_message = get_prompt_template("planner_system_message").format(
         ENVIRONMENT_CONTEXT=get_env_context(),
         # TODO: correct the prompt
-        PLUGINS_DESCRIPTION="",
+        PLUGINS_DESCRIPTION="None",
     )
 
     # TODO: add experiences to the system message
@@ -132,29 +132,23 @@ def format_messages(rounds: list[Round]) -> list[BaseMessage]:
 
     # TODO: compress history rounds if needed
 
+    conv_prefix = "Let's start the new conversation!"
     for rnd_idx, round in enumerate(rounds):
-        prefix = None
-        if rnd_idx == 0:
-            # TODO: remove this if find a better way to add examples
-            prefix = "Let's start the new conversation!"
-
         for post_idx, post in enumerate(round.posts):
-            if post_idx == 0:
+            if rnd_idx == 0 and post_idx == 0:
                 assert post.send_from == "User", "The first post must be from User."
                 assert post.send_to == "Planner", "The first post must be sent to Planner."
 
-                message = f"{prefix}\n{post.message}" if prefix is not None else post.message
+            if post.send_from == "Planner":
+                assert post.original_messages is not None, "Original messages are required for Planner."
+                messages += post.original_messages
+            else:
+                if rnd_idx == 0 and post_idx == 0:
+                    message = f"{conv_prefix}\n{post.message}"
+                else:
+                    message = post.message
                 message = f"From: {post.send_from}\nMessage: {message}"
                 messages.append(HumanMessage(content=message))
-            else:
-                if post.send_from == "Planner":
-                    assert post.original_messages is not None, "Original messages are required for Planner."
-                    messages += post.original_messages
-                else:
-                    message = f"From: {post.send_from}\nMessage: {post.message}"
-                    messages.append(HumanMessage(content=message))
-
-        messages.append(HumanMessage(content=round.user_query))
 
     return messages
 
@@ -177,7 +171,6 @@ def planner_node(state: AgentState, config: RunnableConfig):
     revise_message = None
 
     if parsing_error is not None:
-        # TODO: handle the parsing error.
         revise_message = f"Parsing error:\n{parsing_error}\n\nPlease regenerate the plan."
 
     if plan.send_to not in ["User", "CodeGenerator"]:
