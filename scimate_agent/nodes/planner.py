@@ -1,15 +1,27 @@
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import Any, Literal
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables.config import RunnableConfig
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
 from scimate_agent.prompts import get_prompt_template
+from scimate_agent.state import (
+    AgentState,
+    Attachment,
+    AttachmentType,
+    Post,
+    Round,
+    RoundUpdate,
+)
 from scimate_agent.utils.env import get_env_context
-if TYPE_CHECKING:
-    from scimate_agent.state import AgentState
 
 
 class Plan(BaseModel):
@@ -46,6 +58,39 @@ class Plan(BaseModel):
         description="The message of Planner sent to the receipt Character. If there is any file path in the message, it should be formatted as links in Markdown, i.e., [file_name](file_path)"
     )
 
+    def to_post(
+        self,
+        id: str | None = None,
+        original_messages: list[BaseMessage] | None = None,
+    ) -> Post:
+        attachments = [
+            Attachment.new(
+                type=AttachmentType.INIT_PLAN,
+                content=self.init_plan,
+            ),
+            Attachment.new(
+                type=AttachmentType.PLAN,
+                content=self.plan,
+            ),
+            Attachment.new(
+                type=AttachmentType.CURRENT_PLAN_STEP,
+                content=self.current_plan_step,
+            ),
+            Attachment.new(
+                type=AttachmentType.REVIEW,
+                content=self.review,
+            ),
+        ]
+
+        return Post.new(
+            id=id,
+            send_from="Planner",
+            send_to=self.send_to,
+            message=self.message,
+            attachments=attachments,
+            original_messages=original_messages,
+        )
+
 
 @lru_cache
 def _get_planner_llm(llm_vendor: str, llm_model: str, llm_temperature: float):
@@ -60,48 +105,150 @@ def _get_planner_llm(llm_vendor: str, llm_model: str, llm_temperature: float):
     else:
         raise ValueError(f"Unsupported LLM vendor: {llm_vendor}")
 
-    return llm.with_structured_output(Plan)
+    return llm.with_structured_output(Plan, include_raw=True)
 
 
-def planner_start_node(state: AgentState, config: RunnableConfig):
-    planner_messages = state["planner_messages"]
-    user_initial_query = state["user_initial_query"]
-
-    messages = []
-    if len(planner_messages) == 0:
-        function_manager = config["configurable"].get("function_manager", None)
-
-        system_message = get_prompt_template("planner_system_message").format(
-            environment_context=get_env_context(),
-            function_description=function_manager.get_function_description_for_planner(),
-        )
-
-        messages.append(SystemMessage(content=system_message))
-
-    messages.append(HumanMessage(content=user_initial_query))
-
-    return {"planner_messages": messages}
-
-
-def planner_thinking_node(state: AgentState, config: RunnableConfig):
+def get_planner_llm(config: RunnableConfig):
     llm_vendor = config["configurable"].get("llm_vendor", "openai")
     llm_model = config["configurable"].get("llm_model", "gpt-4o-mini")
     llm_temperature = config["configurable"].get("llm_temperature", 0)
-    llm = _get_planner_llm(llm_vendor, llm_model, llm_temperature)
+    return _get_planner_llm(llm_vendor, llm_model, llm_temperature)
 
-    plan: Plan = llm.invoke(state["planner_messages"])
 
-    return {"current_plan": plan}
+def format_messages(rounds: list[Round]) -> list[BaseMessage]:
+    messages = []
+
+    system_message = get_prompt_template("planner_system_message").format(
+        ENVIRONMENT_CONTEXT=get_env_context(),
+        # TODO: correct the prompt
+        PLUGINS_DESCRIPTION="",
+    )
+
+    # TODO: add experiences to the system message
+
+    messages.append(SystemMessage(content=system_message))
+
+    # TODO: add examples
+
+    # TODO: compress history rounds if needed
+
+    for rnd_idx, round in enumerate(rounds):
+        prefix = None
+        if rnd_idx == 0:
+            # TODO: remove this if find a better way to add examples
+            prefix = "Let's start the new conversation!"
+
+        for post_idx, post in enumerate(round.posts):
+            if post_idx == 0:
+                assert post.send_from == "User", "The first post must be from User."
+                assert post.send_to == "Planner", "The first post must be sent to Planner."
+
+                message = f"{prefix}\n{post.message}" if prefix is not None else post.message
+                message = f"From: {post.send_from}\nMessage: {message}"
+                messages.append(HumanMessage(content=message))
+            else:
+                if post.send_from == "Planner":
+                    assert post.original_messages is not None, "Original messages are required for Planner."
+                    messages += post.original_messages
+                else:
+                    message = f"From: {post.send_from}\nMessage: {post.message}"
+                    messages.append(HumanMessage(content=message))
+
+        messages.append(HumanMessage(content=round.user_query))
+
+    return messages
+
+
+def planner_node(state: AgentState, config: RunnableConfig):
+    rounds = state.get_rounds("Planner")
+    assert len(rounds) > 0, "No round found for Planner."
+
+    current_round = rounds[-1]
+
+    messages = format_messages(rounds)
+
+    llm = get_planner_llm(config)
+    result: dict[Literal["raw", "parsed", "parsing_error"], Any] = llm.invoke(messages)
+
+    raw_message: AIMessage = result["raw"]
+    plan: Plan = result["parsed"]
+    parsing_error: BaseException | None = result["parsing_error"]
+
+    revise_message = None
+
+    if parsing_error is not None:
+        # TODO: handle the parsing error.
+        revise_message = f"Parsing error:\n{parsing_error}\n\nPlease regenerate the plan."
+
+    if plan.send_to not in ["User", "CodeGenerator"]:
+        revise_message = (
+            f"Unsupported send_to: `{plan.send_to}`. Please check the `send_to` field. "
+            "Only `User` and `CodeGenerator` are supported."
+        )
+
+    assert len(raw_message.tool_calls) == 1, f"Invalid tool call count: {len(raw_message.tool_calls)}"
+    posts = [
+        plan.to_post(
+            original_messages=[
+                raw_message,
+                ToolMessage(content="", tool_call_id=raw_message.tool_calls[0]["id"]),
+            ]
+        )
+    ]
+
+    self_correction_count = state.planner_self_correction_count
+
+    if revise_message is not None:
+        # Self-correction. Max 3 times.
+        posts.append(
+            Post.new(
+                send_from="Validator",  # TODO: Plan Validator?
+                send_to="Planner",
+                message=revise_message,
+            )
+        )
+        self_correction_count = self_correction_count + 1 if self_correction_count is not None else 1
+    else:
+        # Reset self-correction count when the plan is correct.
+        self_correction_count = None
+
+    return {
+        "rounds": RoundUpdate(
+            id=current_round.id,
+            posts=posts,
+        ),
+        "planner_self_correction_count": self_correction_count,
+    }
 
 
 def planner_router_edge(state: AgentState) -> str:
-    plan = state["current_plan"]
+    rounds = state.rounds
+    assert len(rounds) > 0, "No round found for Planner."
 
-    assert plan is not None, "Plan is not generated."
+    last_round = rounds[-1]
+    if len(last_round.posts) == 0:
+        raise ValueError("No post found for Planner.")
+    last_post = last_round.posts[-1]
 
-    if plan.send_to == "User":
-        return "planner_start_node"
-    elif plan.send_to == "CodeGenerator":
-        return "code_generator_start_node"
+    assert last_post.send_from in ["Planner", "Validator"], (
+        "Last post is not from Planner or Validator."
+    )
+
+    if last_post.send_from == "Planner":
+        if last_post.send_to == "User":
+            return "human_node"
+        elif last_post.send_to == "CodeGenerator":
+            return "code_generator_node"
+        else:
+            raise ValueError(f"Unsupported send_to: {last_post.send_to}")
     else:
-        raise ValueError(f"Unsupported send_to: {plan.send_to}")
+        # From `Validator`, self-correction
+        assert last_post.send_to == "Planner", (
+            f"Validator must send to Planner, but got `{last_post.send_to}`."
+        )
+
+        self_correction_count = state.planner_self_correction_count
+        if self_correction_count is None or self_correction_count <= 3:
+            return "planner_node"
+        else:
+            return END

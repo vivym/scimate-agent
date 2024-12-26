@@ -2,7 +2,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-PromptName = Literal["planner_system_message"]
+PromptName = Literal[
+    "planner_system_message",
+    "code_generator_system_message",
+]
 
 
 @lru_cache
