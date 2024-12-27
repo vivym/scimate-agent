@@ -1,7 +1,8 @@
 from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, InstanceOf
 
+from scimate_agent.nodes.code_executor.session import SessionClient, SessionManager
 from scimate_agent.role import Role
 from .round import Round, update_rounds
 
@@ -14,6 +15,10 @@ class AgentState(BaseModel):
     planner_self_correction_count: int | None = None
 
     code_generator_self_correction_count: int | None = None
+
+    code_executor_session_mgr: InstanceOf[SessionManager] | None = None
+
+    code_executor_session_client: InstanceOf[SessionClient] | None = None
 
     @classmethod
     def new_initial_state(
