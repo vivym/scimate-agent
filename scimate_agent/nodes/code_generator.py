@@ -12,12 +12,9 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
-from scimate_agent.state import AgentState
 from scimate_agent.prompts.prompt import get_prompt_template
 from scimate_agent.state import (
-    AgentState,
-    Attachment,
-    AttachmentType,
+    CodeInterpreterState,
     Post,
     Round,
     RoundUpdate,
@@ -47,7 +44,7 @@ class CodeGenerationResult(BaseModel):
         id: str | None = None,
         original_messages: list[BaseMessage] | None = None,
     ) -> Post:
-        send_to = "CodeExecutor" if self.reply_type == "python" else "Planner"
+        send_to = "CodeVerifier" if self.reply_type == "python" else "Planner"
         return Post.new(
             id=id,
             send_from="CodeGenerator",
@@ -130,19 +127,29 @@ def format_messages(rounds: list[Round]):
                     )
 
                 messages.append(HumanMessage(content=message))
-            elif post.send_from == "CodeGenerator" and post.send_to == "CodeGenerator":
+            elif post.send_from == "Reviser" and post.send_to == "CodeGenerator":
                 # Self-correction
-                messages += post.original_messages
-            elif post.send_from == "CodeGenerator" and post.send_to == "Planner":
+                if is_first_post:
+                    message = conv_prefix + "\n"
+                else:
+                    message = ""
+
+                message += get_prompt_template("code_generator_user_message").format(
+                    FEEDBACK="None",  # TODO: add feedback
+                    MESSAGE=post.message,  # revise message
+                )
+
+                messages.append(HumanMessage(content=message))
+            elif post.send_from == "CodeGenerator" and post.send_to in ["CodeVerifier", "Planner", "Reviser"]:
                 messages += post.original_messages
             else:
-                raise ValueError(f"Invalid post: {post}")
+                raise ValueError(f"Invalid post ({post.send_from} -> {post.send_to}): {post}")
 
     return messages
 
 
-def code_generator_node(state: AgentState, config: RunnableConfig):
-    rounds = state.get_rounds("CodeGenerator")
+def code_generator_node(state: CodeInterpreterState, config: RunnableConfig):
+    rounds = state.get_rounds()
     assert len(rounds) > 0, "No round found for CodeGenerator."
 
     current_round = rounds[-1]
@@ -167,8 +174,6 @@ def code_generator_node(state: AgentState, config: RunnableConfig):
             "Only `python` and `text` are supported."
         )
 
-    # TODO: Code Verification
-
     assert len(raw_message.tool_calls) == 1, f"Invalid tool call count: {len(raw_message.tool_calls)}"
     posts = [
         cg_result.to_post(
@@ -179,32 +184,30 @@ def code_generator_node(state: AgentState, config: RunnableConfig):
         )
     ]
 
-    self_correction_count = state.code_generator_self_correction_count
+    self_correction_count = state.self_correction_count
 
     if revise_message is not None:
         # Self-correction. Max 3 times.
+        posts[-1].send_to = "Reviser"
         posts.append(
             Post.new(
-                send_from="Validator",  # TODO: CG Validator?
+                send_from="Reviser",
                 send_to="CodeGenerator",
                 message=revise_message,
             )
         )
         self_correction_count = self_correction_count + 1 if self_correction_count is not None else 1
-    else:
-        # Reset self-correction count when the plan is correct.
-        self_correction_count = None
 
     return {
         "rounds": RoundUpdate(
             id=current_round.id,
             posts=posts,
         ),
-        "code_generator_self_correction_count": self_correction_count,
+        "self_correction_count": self_correction_count,
     }
 
 
-def code_generator_router_edge(state: AgentState) -> str:
+def code_generator_router_edge(state: CodeInterpreterState) -> str:
     rounds = state.rounds
     assert len(rounds) > 0, "No round found for CodeGenerator."
 
@@ -213,21 +216,16 @@ def code_generator_router_edge(state: AgentState) -> str:
         raise ValueError("No post found for CodeGenerator.")
     last_post = last_round.posts[-1]
 
-    assert last_post.send_from in ["CodeGenerator", "Validator"], (
-        "Last post is not from CodeGenerator or Validator."
-    )
-
     if last_post.send_from == "CodeGenerator":
         if last_post.send_to == "Planner":
-            return "planner_node"
-        elif last_post.send_to == "CodeExecutor":
-            return "code_executor_node"
+            return END
+        elif last_post.send_to == "CodeVerifier":
+            return "code_verifier_node"
         else:
             raise ValueError(f"Unsupported send_to: {last_post.send_to}")
-    else:
-        # From `Validator`, self-correction
+    elif last_post.send_from == "Reviser":
         assert last_post.send_to == "CodeGenerator", (
-            f"Validator must send to CodeGenerator, but got `{last_post.send_to}`."
+            f"Reviser must send to CodeGenerator, but got `{last_post.send_to}`."
         )
 
         self_correction_count = state.code_generator_self_correction_count
@@ -235,3 +233,5 @@ def code_generator_router_edge(state: AgentState) -> str:
             return "code_generator_node"
         else:
             return END
+    else:
+        raise ValueError("Last post is not from CodeGenerator or Reviser.")

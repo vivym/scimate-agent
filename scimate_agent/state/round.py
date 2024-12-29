@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from .post import Post
+from .post import Post, PostUpdate
 
 RoundStatus = Literal["created", "finished", "failed"]
 
@@ -82,7 +82,20 @@ def update_rounds(
 
             if update.posts is not None:
                 # Do not use `extend` because it mutates the list in place
-                new_round.posts = new_round.posts + update.posts
+                new_posts = [p for p in new_round.posts]
+                existing_posts = {p.id: p for p in new_posts}
+                for post in update.posts:
+                    if isinstance(post, PostUpdate):
+                        if post.id in existing_posts:
+                            existing_posts[post.id] = existing_posts[post.id].update(post)
+                        else:
+                            new_posts.append(post.to_post())
+                    elif isinstance(post, Post):
+                        new_posts.append(post)
+                    else:
+                        raise ValueError(f"Invalid post: {post}")
+
+                new_round.posts = new_posts
 
             if update.status is not None:
                 new_round.status = update.status

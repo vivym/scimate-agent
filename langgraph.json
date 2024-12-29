@@ -1,5 +1,8 @@
 {
     "dependencies": ["."],
-    "graphs": {"scimate": "./scimate_agent/agent.py:graph"},
+    "graphs": {
+        "scimate": "./scimate_agent/agent.py:scimate_agent_graph",
+        "code_interpreter": "./scimate_agent/agent.py:code_interpreter_graph"
+    },
     "env": ".env"
 }
