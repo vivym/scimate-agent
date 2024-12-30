@@ -13,7 +13,7 @@ class Post(BaseModel):
     message: str
     attachments: list[Attachment]
 
-    original_messages: list[BaseMessage] | None
+    original_messages: list[dict] | None
 
     @classmethod
     def new(
@@ -24,10 +24,14 @@ class Post(BaseModel):
         # Optional fields
         id: str | None = None,
         attachments: list[Attachment] | None = None,
-        original_messages: list[BaseMessage] | None = None,
+        original_messages: list[BaseMessage | dict] | None = None,
     ) -> "Post":
         id = id if id is not None else str(uuid.uuid4())
         attachments = attachments if attachments is not None else []
+        if original_messages is not None:
+            original_messages = [
+                msg.to_json() if isinstance(msg, BaseMessage) else msg for msg in original_messages
+            ]
         return cls(
             id=id,
             send_from=send_from,
@@ -59,10 +63,19 @@ class Post(BaseModel):
         if update.original_messages is not None:
             if post.original_messages is None:
                 post.original_messages = []
+            original_messages = [
+                msg.to_json() if isinstance(msg, BaseMessage) else msg for msg in update.original_messages
+            ]
             # Do not use `extend` because it mutates the list in place
-            post.original_messages = post.original_messages + update.original_messages
+            post.original_messages = post.original_messages + original_messages
 
         return post
+
+    def get_attachments(self, attachment_type: str | None = None) -> list[Attachment]:
+        if attachment_type is None:
+            return self.attachments
+        else:
+            return [a for a in self.attachments if a.type == attachment_type]
 
 
 class PostUpdate(BaseModel):
@@ -71,7 +84,7 @@ class PostUpdate(BaseModel):
     send_to: str | None = None
     message: str | None = None
     attachments: list[Attachment] | None = None
-    original_messages: list[BaseMessage] | None = None
+    original_messages: list[BaseMessage | dict] | None = None
 
     def to_post(self) -> Post:
         if self.send_from is None:

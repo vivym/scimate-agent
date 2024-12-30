@@ -4,7 +4,7 @@ from typing import Any
 
 from langgraph.graph import END
 
-from scimate_agent.state import CodeInterpreterState, Post, RoundUpdate
+from scimate_agent.state import Attachment, AttachmentType, CodeInterpreterState, Post, RoundUpdate
 
 LINE_MAGIC_PATTERN = re.compile(r"^\s*%\s*[a-zA-Z_]\w*")
 CELL_MAGIC_PATTERN = re.compile(r"^\s*%%\s*[a-zA-Z_]\w*")
@@ -225,6 +225,13 @@ def code_verifier_node(state: CodeInterpreterState) -> dict[str, Any]:
             send_from="CodeVerifier",
             send_to="CodeGenerator",
             message=f"The code has the following errors:\n{error_message}",
+            attachments=last_post.attachments + [
+                Attachment.new(
+                    type=AttachmentType.CODE_VERIFICATION_RESULT,
+                    content=error_message,
+                    extra=errors,
+                )
+            ],
             original_messages=last_post.original_messages,
         )
         self_correction_count = self_correction_count + 1 if self_correction_count is not None else 1
@@ -235,6 +242,12 @@ def code_verifier_node(state: CodeInterpreterState) -> dict[str, Any]:
             send_to="CodeExecutor",
             message=code,
             original_messages=last_post.original_messages,
+            attachments=last_post.attachments + [
+                Attachment.new(
+                    type=AttachmentType.CODE_VERIFICATION_RESULT,
+                    content="Code verification has been passed.",
+                )
+            ],
         )
 
     return {

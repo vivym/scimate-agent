@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Any, Literal
 
+from langchain_core.load import load as lc_load
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -14,12 +15,16 @@ from pydantic import BaseModel, Field
 
 from scimate_agent.prompts.prompt import get_prompt_template
 from scimate_agent.state import (
+    Attachment,
+    AttachmentType,
     CodeInterpreterState,
     Post,
     Round,
     RoundUpdate,
 )
 from scimate_agent.utils.env import get_env_context
+
+ROLE_NAME = "CodeGenerator"
 
 
 class CodeGenerationResult(BaseModel):
@@ -50,6 +55,13 @@ class CodeGenerationResult(BaseModel):
             send_from="CodeGenerator",
             send_to=send_to,
             message=self.reply_content,
+            attachments=[
+                Attachment.new(
+                    type=AttachmentType.CODE_GENERATION_RESULT,
+                    content=self.reply_content,
+                    extra=self,
+                )
+            ],
             original_messages=original_messages,
         )
 
@@ -77,12 +89,121 @@ def get_code_generator_llm(config: RunnableConfig):
     return _get_code_generator_llm(llm_vendor, llm_model, llm_temperature)
 
 
-def format_messages(rounds: list[Round]):
+def format_feedback(post: Post | None) -> str:
+    if post is None:
+        return "None"
+
+    assert post.send_from in [
+        "CodeVerifier",
+        "CodeExecutor",
+    ], f"Invalid post: {post.send_from} -> {post.send_to}"
+    assert post.send_to in ["CodeGenerator", "Planner"], f"Invalid post: {post.send_from} -> {post.send_to}"
+
+    feedback_items: dict[str, Attachment] = {}
+
+    for attachment in reversed(post.attachments):
+        if attachment.type == AttachmentType.CODE_VERIFICATION_RESULT:
+            if "verification_result" not in feedback_items:
+                feedback_items["verification_result"] = attachment
+        elif attachment.type == AttachmentType.CODE_EXECUTION_RESULT:
+            if "execution_result" not in feedback_items:
+                feedback_items["execution_result"] = attachment
+
+    feedback = ""
+    if "verification_result" in feedback_items:
+        verification_result = feedback_items["verification_result"].extra
+        if verification_result is not None:
+            assert isinstance(verification_result, list), "Verification result must be a list."
+            error_msg = "\n".join(verification_result)
+            feedback += f"## Verification\nCode verification detected the following issues:\n{error_msg}\n"
+        else:
+            feedback += f"## Verification\nCode verification has been passed.\n"
+    if "execution_result" in feedback_items:
+        execution_result = feedback_items["execution_result"]
+        if isinstance(execution_result.extra, dict):
+            is_success = execution_result.extra.get("is_success", False)
+        else:
+            is_success = execution_result.extra.is_success
+
+        if is_success:
+            feedback += f"## Execution\nYour code has been executed successfully with the following result:\n"
+        else:
+            feedback += f"## Execution\nYour code has failed to execute with the following error:\n"
+        feedback += f"{execution_result.content}\n"
+
+    if feedback == "":
+        feedback = "None"
+
+    return feedback
+
+
+def format_code_generation_requirements(role_name: str, config: RunnableConfig) -> str:
+    allowed_modules = config["configurable"].get("allowed_modules", None)
+    blocked_modules = config["configurable"].get("blocked_modules", None)
+    allowed_functions = config["configurable"].get("allowed_functions", None)
+    blocked_functions = config["configurable"].get("blocked_functions", None)
+    allowed_variables = config["configurable"].get("allowed_variables", None)
+    blocked_variables = config["configurable"].get("blocked_variables", None)
+
+    requirements: list[str] = []
+
+    if allowed_modules is not None:
+        if len(allowed_modules) > 0:
+            requirements.append(
+                f"- {role_name} can only import the following Python modules: "
+                + ", ".join([f"{module}" for module in allowed_modules]),
+            )
+        else:
+            requirements.append(f"- {role_name} cannot import any Python modules.")
+
+    if blocked_modules is not None:
+        if len(blocked_modules) > 0:
+            requirements.append(
+                f"- {role_name} cannot use the following Python modules: "
+                + ", ".join([f"{module}" for module in blocked_modules]),
+            )
+
+    if allowed_functions is not None:
+        if len(allowed_functions) > 0:
+            requirements.append(
+                f"- {role_name} can only use the following Python functions: "
+                + ", ".join([f"{func}" for func in allowed_functions]),
+            )
+        else:
+            requirements.append(f"- {role_name} cannot use any Python functions.")
+
+    if blocked_functions is not None:
+        if len(blocked_functions) > 0:
+            requirements.append(
+                f"- {role_name} cannot use the following Python functions: "
+                + ", ".join([f"{func}" for func in blocked_functions]),
+            )
+
+    if allowed_variables is not None:
+        if len(allowed_variables) > 0:
+            requirements.append(
+                f"- {role_name} can only use the following variables: "
+                + ", ".join([f"{var}" for var in allowed_variables]),
+            )
+        else:
+            requirements.append(f"- {role_name} cannot use any variables.")
+
+    if blocked_variables is not None:
+        if len(blocked_variables) > 0:
+            requirements.append(
+                f"- {role_name} cannot use the following variables: "
+                + ", ".join([f"{var}" for var in blocked_variables]),
+            )
+
+    return "\n".join(requirements)
+
+
+def format_messages(rounds: list[Round], config: RunnableConfig):
     messages = []
 
     system_message = get_prompt_template("code_generator_system_message").format(
         ENVIRONMENT_CONTEXT=get_env_context(),
-        ROLE_NAME="CodeGenerator",
+        ROLE_NAME=ROLE_NAME,
     )
 
     # TODO: add experiences to the system message
@@ -94,11 +215,12 @@ def format_messages(rounds: list[Round]):
     # TODO: compress history rounds if needed
 
     conv_prefix = get_prompt_template("code_generator_conv_head").format(
-        SUMMARY="",  # TODO: add summary
-        PLUGINS="",  # TODO: add plugins
-        ROLE_NAME="CodeGenerator",
+        SUMMARY="None",  # TODO: add summary
+        PLUGINS="None",  # TODO: add plugins
+        ROLE_NAME=ROLE_NAME,
     )
 
+    last_post = None
     for rnd_idx, round in enumerate(rounds):
         for post_idx, post in enumerate(round.posts):
             is_first_post = rnd_idx == 0 and post_idx == 0
@@ -107,6 +229,12 @@ def format_messages(rounds: list[Round]):
             if post.send_from == "Planner" and post.send_to == "CodeGenerator":
                 if is_final_post:
                     enrichment = f"The user request is: {round.user_query}\n\n"
+
+                    plan_enrichments = post.get_attachments(AttachmentType.PLAN_ENRICHMENT)
+                    if len(plan_enrichments) > 0:
+                        enrichment += "Additional context:\n" + "\n".join(
+                            [e.content for e in plan_enrichments]
+                        ) + "\n\n"
                 else:
                     enrichment = ""
 
@@ -115,15 +243,22 @@ def format_messages(rounds: list[Round]):
                 else:
                     message = ""
 
+                feedback = "None"
+                if last_post is not None:
+                    # TODO: check if send_from and send_to are valid
+                    feedback = format_feedback(last_post)
+
                 message += get_prompt_template("code_generator_user_message").format(
-                    FEEDBACK="None",  # TODO: add feedback
+                    FEEDBACK=feedback,
                     MESSAGE=f"{enrichment}The task for this specific step is: {post.message}",
                 )
 
                 if is_final_post:
-                    message += "\n" + get_prompt_template("code_generator_requirements").format(
-                        ROLE_NAME="CodeGenerator",
-                        CODE_GENERATION_REQUIREMENTS="",  # TODO: add code generation requirements
+                    message += "\n\n" + get_prompt_template("code_generator_requirements").format(
+                        ROLE_NAME=ROLE_NAME,
+                        CODE_GENERATION_REQUIREMENTS=format_code_generation_requirements(
+                            ROLE_NAME, config
+                        ),
                     )
 
                 messages.append(HumanMessage(content=message))
@@ -135,15 +270,38 @@ def format_messages(rounds: list[Round]):
                     message = ""
 
                 message += get_prompt_template("code_generator_user_message").format(
-                    FEEDBACK="None",  # TODO: add feedback
+                    FEEDBACK=format_feedback(last_post),
                     MESSAGE=post.message,  # revise message
                 )
 
+                if is_final_post:
+                    message += "\n" + get_prompt_template("code_generator_requirements").format(
+                        ROLE_NAME=ROLE_NAME,
+                        CODE_GENERATION_REQUIREMENTS=format_code_generation_requirements(
+                            ROLE_NAME, config
+                        ),
+                    )
+
                 messages.append(HumanMessage(content=message))
-            elif post.send_from == "CodeGenerator" and post.send_to in ["CodeVerifier", "Planner", "Reviser"]:
-                messages += post.original_messages
+            elif post.send_from == "CodeGenerator" and post.send_to in [
+                "CodeVerifier",
+                "Planner",
+                "Reviser",
+            ]:
+                assert post.original_messages is not None, "Original messages are required."
+                original_messages = [
+                    lc_load(msg)
+                    for msg in post.original_messages
+                ]
+                messages += original_messages
+            elif post.send_from == "CodeVerifier" and post.send_to == "CodeExecutor":
+                ...
+            elif post.send_from == "CodeExecutor" and post.send_to == "Planner":
+                ...
             else:
                 raise ValueError(f"Invalid post ({post.send_from} -> {post.send_to}): {post}")
+
+            last_post = post
 
     return messages
 
@@ -154,7 +312,7 @@ def code_generator_node(state: CodeInterpreterState, config: RunnableConfig):
 
     current_round = rounds[-1]
 
-    messages = format_messages(rounds)
+    messages = format_messages(rounds, config)
 
     llm = get_code_generator_llm(config)
     result: dict[Literal["raw", "parsed", "parsing_error"], Any] = llm.invoke(messages)

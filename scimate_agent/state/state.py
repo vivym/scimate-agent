@@ -54,6 +54,8 @@ class CodeInterpreterState(BaseModel):
 
     code_executor_session_client: str | None = None
 
+    # TODO: make `env_id`, `env_dir` and `session_id` as state variables
+
     def get_rounds(self, role: Role | None = None, include_failure_rounds: bool = False) -> list[Round]:
         rounds: list[Round] = []
 

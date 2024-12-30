@@ -85,14 +85,12 @@ class Environment:
         session_dir: str | None = None,
         cwd: str | None = None,
     ) -> None:
-        session = self._get_session(session_id, session_dir)
+        session = self._get_session(session_id, session_dir, cwd)
         session_dir = os.path.realpath(session.session_dir)
+        cwd = os.path.realpath(session.cwd)
 
         kernel_session_dir = os.path.join(session_dir, "kernel")
         os.makedirs(kernel_session_dir, exist_ok=True)
-
-        cwd = cwd or os.path.join(session_dir, "cwd")
-        os.makedirs(cwd, exist_ok=True)
 
         new_kernel_id = get_id(prefix="knl")
 
@@ -192,7 +190,7 @@ class Environment:
             code=f"%_scimate_exec_post_check {exec_id} {exec_index}",
         )
 
-        return self._parse_exec_result(exec_result, exec_extra_result["data"])
+        return self._parse_exec_result(exec_result, exec_extra_result["data"], session.cwd)
 
     def load_plugin(
         self,
@@ -252,13 +250,22 @@ class Environment:
         )
         return result["data"]
 
-    def _get_session(self, session_id: str, session_dir: str | None = None) -> Session | None:
+    def _get_session(
+        self,
+        session_id: str,
+        session_dir: str | None = None,
+        cwd: str | None = None,
+    ) -> Session | None:
         if session_id not in self.session_dict and session_dir is not None:
+            session_dir = session_dir or self.get_default_session_dir(session_id)
+            cwd = cwd or os.path.join(session_dir, "cwd")
             new_session = Session(
                 session_id=session_id,
-                session_dir=session_dir or self.get_default_session_dir(session_id),
+                session_dir=session_dir,
+                cwd=cwd,
             )
             os.makedirs(new_session.session_dir, exist_ok=True)
+            os.makedirs(new_session.cwd, exist_ok=True)
             self.session_dict[session_id] = new_session
 
         return self.session_dict.get(session_id, None)
@@ -437,10 +444,12 @@ class Environment:
         self,
         exec_result: ExecutionResultInternal,
         extra_result: dict[str, Any] | None = None,
+        cwd: str | None = None,
     ) -> ExecutionResult:
         result = ExecutionResult(
             exec_id=exec_result.exec_id,
             code=exec_result.code,
+            cwd=cwd,
             is_success=exec_result.error is None,
             error=exec_result.error,
             output=None,

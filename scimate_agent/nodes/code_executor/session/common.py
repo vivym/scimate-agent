@@ -58,6 +58,8 @@ class ExecutionResult:
     exec_id: str
     code: str
 
+    cwd: str | None = None
+
     is_success: bool = False
     error: str | None = None
 
@@ -73,6 +75,9 @@ class ExecutionResult:
 class Session:
     session_id: str
     session_dir: str
+
+    cwd: str
+
     session_vars: dict[str, str] = field(default_factory=dict)
 
     kernel_id: str | None = None

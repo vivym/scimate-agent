@@ -12,6 +12,12 @@ class AttachmentType(Enum):
     CURRENT_PLAN_STEP = "current_plan_step"
     REVIEW = "review"
 
+    # CodeInterpreter
+    PLAN_ENRICHMENT = "plan_enrichment"
+    CODE_GENERATION_RESULT = "code_generation_result"
+    CODE_VERIFICATION_RESULT = "code_verification_result"
+    CODE_EXECUTION_RESULT = "code_execution_result"
+
 
 class Attachment(BaseModel):
     id: str
