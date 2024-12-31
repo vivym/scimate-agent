@@ -8,20 +8,29 @@ from langgraph.graph import END
 
 from scimate_agent.state import Attachment, AttachmentType, CodeInterpreterState, Post, RoundUpdate
 from .session import ExecutionResult, SessionManager, SessionClient
+from .utils import get_id
 
 TRUNCATE_CHAR_LENGTH = 1000
 
-
-# This is a temporary function to get session manager.
-# TODO: Seperate code executor to its own service.
-@lru_cache
-def _get_session_mgr(env_id: str, env_dir: str) -> SessionManager:
-    return SessionManager(env_id=env_id, env_dir=env_dir)
+SESSION_CLIENT_CACHE = {}
 
 
-@lru_cache
-def _get_session_client(session_mgr: SessionManager, thread_id: str) -> SessionClient:
-    return session_mgr.get_session_client(session_id=thread_id)
+def get_session_client(env_id: str | None, env_dir: str | None, session_id: str | None) -> SessionClient:
+    cache_key = (env_id, env_dir, session_id)
+
+    if cache_key not in SESSION_CLIENT_CACHE:
+        session_mgr = SessionManager(env_id=env_id, env_dir=env_dir)
+        if session_id is None:
+            session_id = get_id(prefix="sess")
+
+        session_client = session_mgr.get_session_client(session_id=session_id)
+        session_client.start()
+
+        cache_key = (session_mgr.env_id, session_mgr.env_dir, session_id)
+
+        SESSION_CLIENT_CACHE[cache_key] = session_client
+
+    return SESSION_CLIENT_CACHE[cache_key]
 
 
 def get_artifact_uri(execution_id: str, file: str, use_local_uri: bool) -> str:
@@ -135,26 +144,24 @@ def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> d
 
     code = last_post.message
 
-    if state.code_executor_session_mgr is None:
+    if state.env_id is None:
+        # Initialize session manager and session client from `config`
         env_id = config["configurable"].get("env_id", None)
         env_dir = config["configurable"].get("env_dir", None)
-    else:
-        env_id, env_dir = state.code_executor_session_mgr
-
-    session_mgr = _get_session_mgr(env_id, env_dir)
-    env_id = session_mgr.env_id
-    env_dir = session_mgr.env_dir
-
-    if state.code_executor_session_client is None:
         session_id = config["configurable"].get("thread_id", None)
         if session_id is None:
             raise ValueError("Thread ID is required.")
         session_id = str(session_id)
-        session_client = _get_session_client(session_mgr, session_id)
-        session_client.start()
     else:
-        session_id = state.code_executor_session_client
-        session_client = _get_session_client(session_mgr, session_id)
+        env_id = state.env_id
+        env_dir = state.env_dir
+        session_id = state.session_id
+
+        assert env_id is not None, "Environment ID is required."
+        assert env_dir is not None, "Environment directory is required."
+        assert session_id is not None, "Session ID is required."
+
+    session_client = get_session_client(env_id=env_id, env_dir=env_dir, session_id=session_id)
 
     result = session_client.execute_code(exec_id=f"{session_id}-{last_round.id}", code=code)
 
@@ -174,9 +181,11 @@ def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> d
             ],
             original_messages=last_post.original_messages,
         )
+        # Reset self-correction count
         self_correction_count = None
     else:
         # Self-correct the code
+        # TODO: make sure this is correct
         post = Post.new(
             send_from="CodeExecutor",
             send_to="CodeGenerator",
@@ -198,8 +207,9 @@ def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> d
             posts=[post],
         ),
         "self_correction_count": self_correction_count,
-        "code_executor_session_mgr": (env_id, env_dir),
-        "code_executor_session_client": session_id,
+        "env_id": env_id,
+        "env_dir": env_dir,
+        "session_id": session_id,
     }
 
 

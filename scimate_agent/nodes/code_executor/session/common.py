@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
+from jupyter_client.blocking.client import BlockingKernelClient
+
 from scimate_agent.plugins import ArtifactType
 
 ExecType = Literal["user", "control"]
@@ -93,3 +95,5 @@ class Session:
 
     execution_count: int = 0
     execution_dict: dict[str, ExecutionResultInternal] = field(default_factory=dict)
+
+    client: BlockingKernelClient | None = None

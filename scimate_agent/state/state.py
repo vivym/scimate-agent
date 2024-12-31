@@ -1,8 +1,7 @@
 from typing import Annotated
 
-from pydantic import BaseModel, InstanceOf
+from pydantic import BaseModel
 
-from scimate_agent.nodes.code_executor.session import SessionClient, SessionManager
 from scimate_agent.role import Role
 from .round import Round, update_rounds
 
@@ -50,11 +49,10 @@ class CodeInterpreterState(BaseModel):
 
     self_correction_count: int | None = None
 
-    code_executor_session_mgr: tuple[str, str] | None = None
-
-    code_executor_session_client: str | None = None
-
-    # TODO: make `env_id`, `env_dir` and `session_id` as state variables
+    # Execution kernel settings
+    env_id: str | None = None
+    env_dir: str | None = None
+    session_id: str | None = None
 
     def get_rounds(self, role: Role | None = None, include_failure_rounds: bool = False) -> list[Round]:
         rounds: list[Round] = []
@@ -76,13 +74,14 @@ class CodeInterpreterState(BaseModel):
         return rounds
 
     def cleanup(self):
-        # if self.code_executor_session_client is not None:
-        #     print("stopping session client")
-        #     self.code_executor_session_client.stop()
-        #     self.code_executor_session_client = None
+        if self.env_id is not None:
+            from scimate_agent.nodes.code_executor import get_session_client
 
-        # if self.code_executor_session_mgr is not None:
-        #     print("stopping session manager")
-        #     self.code_executor_session_mgr.cleanup()
-        #     self.code_executor_session_mgr = None
-        ...
+            assert self.env_dir is not None, "Internal error: env_dir is None"
+            assert self.session_id is not None, "Internal error: session_id is None"
+            client = get_session_client(env_id=self.env_id, env_dir=self.env_dir, session_id=self.session_id)
+            client.stop()
+
+        self.env_id = None
+        self.env_dir = None
+        self.session_id = None

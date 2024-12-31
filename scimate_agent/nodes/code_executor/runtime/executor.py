@@ -148,9 +148,6 @@ class Executor:
         self.cur_execution_count: int = 0
         self.cur_execution_id: str = ""
 
-        # if not os.path.exists(self.session_dir):
-        #     os.makedirs(self.session_dir, exist_ok=True)
-
         self.ctx = RuntimePluginContext(self)
 
     def log(self, level: LogErrorLevel, msg: str) -> None:
@@ -190,7 +187,7 @@ class Executor:
     def update_session_vars(self, session_vars: dict[str, str]) -> None:
         self.session_vars = {str(k): str(v) for k, v in session_vars.items()}
 
-    def pre_execution(self, exec_id: int, exec_idx: int) -> None:
+    def pre_execution(self, exec_id: str, exec_idx: int) -> None:
         self.cur_execution_id = exec_id
         self.cur_execution_count = exec_idx
 

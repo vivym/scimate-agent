@@ -66,6 +66,11 @@ class CodeGenerationResult(BaseModel):
         )
 
 
+class Example(BaseModel):
+    rounds: list[Round]
+    plugins: list[str]
+
+
 @lru_cache
 def _get_code_generator_llm(llm_vendor: str, llm_model: str, llm_temperature: float):
     if llm_vendor == "openai":
@@ -93,15 +98,19 @@ def format_feedback(post: Post | None) -> str:
     if post is None:
         return "None"
 
-    assert post.send_from in [
-        "CodeVerifier",
-        "CodeExecutor",
+    assert (post.send_from, post.send_to) in [
+        ("Reviser", "CodeGenerator"),
+        ("CodeVerifier", "CodeGenerator"),
+        ("CodeExecutor", "CodeGenerator"),
+        ("CodeExecutor", "Planner"),
     ], f"Invalid post: {post.send_from} -> {post.send_to}"
-    assert post.send_to in ["CodeGenerator", "Planner"], f"Invalid post: {post.send_from} -> {post.send_to}"
 
     feedback_items: dict[str, Attachment] = {}
 
     for attachment in reversed(post.attachments):
+        if len(feedback_items) >= 2:
+            break
+
         if attachment.type == AttachmentType.CODE_VERIFICATION_RESULT:
             if "verification_result" not in feedback_items:
                 feedback_items["verification_result"] = attachment
@@ -118,6 +127,7 @@ def format_feedback(post: Post | None) -> str:
             feedback += f"## Verification\nCode verification detected the following issues:\n{error_msg}\n"
         else:
             feedback += f"## Verification\nCode verification has been passed.\n"
+
     if "execution_result" in feedback_items:
         execution_result = feedback_items["execution_result"]
         if isinstance(execution_result.extra, dict):
@@ -198,25 +208,18 @@ def format_code_generation_requirements(role_name: str, config: RunnableConfig) 
     return "\n".join(requirements)
 
 
-def format_messages(rounds: list[Round], config: RunnableConfig):
+def format_conversation(
+    rounds: list[Round],
+    config: RunnableConfig,
+    plugins: list[str] | None = None,
+    add_requirements: bool = False,
+    summary: str | None = None,
+):
     messages = []
 
-    system_message = get_prompt_template("code_generator_system_message").format(
-        ENVIRONMENT_CONTEXT=get_env_context(),
-        ROLE_NAME=ROLE_NAME,
-    )
-
-    # TODO: add experiences to the system message
-
-    messages.append(SystemMessage(content=system_message))
-
-    # TODO: add examples
-
-    # TODO: compress history rounds if needed
-
     conv_prefix = get_prompt_template("code_generator_conv_head").format(
-        SUMMARY="None",  # TODO: add summary
-        PLUGINS="None",  # TODO: add plugins
+        SUMMARY=summary if summary is not None else "None",
+        PLUGINS="\n".join(plugins) if plugins is not None else "None",
         ROLE_NAME=ROLE_NAME,
     )
 
@@ -245,7 +248,6 @@ def format_messages(rounds: list[Round], config: RunnableConfig):
 
                 feedback = "None"
                 if last_post is not None:
-                    # TODO: check if send_from and send_to are valid
                     feedback = format_feedback(last_post)
 
                 message += get_prompt_template("code_generator_user_message").format(
@@ -253,7 +255,7 @@ def format_messages(rounds: list[Round], config: RunnableConfig):
                     MESSAGE=f"{enrichment}The task for this specific step is: {post.message}",
                 )
 
-                if is_final_post:
+                if is_final_post and add_requirements:
                     message += "\n\n" + get_prompt_template("code_generator_requirements").format(
                         ROLE_NAME=ROLE_NAME,
                         CODE_GENERATION_REQUIREMENTS=format_code_generation_requirements(
@@ -264,18 +266,48 @@ def format_messages(rounds: list[Round], config: RunnableConfig):
                 messages.append(HumanMessage(content=message))
             elif post.send_from == "Reviser" and post.send_to == "CodeGenerator":
                 # Self-correction
-                if is_first_post:
-                    message = conv_prefix + "\n"
-                else:
-                    message = ""
+                assert not is_first_post, "Reviser should not be the first post."
 
-                message += get_prompt_template("code_generator_user_message").format(
-                    FEEDBACK=format_feedback(last_post),
+                message = get_prompt_template("code_generator_user_message").format(
+                    FEEDBACK=format_feedback(post),
                     MESSAGE=post.message,  # revise message
                 )
 
-                if is_final_post:
-                    message += "\n" + get_prompt_template("code_generator_requirements").format(
+                if is_final_post and add_requirements:
+                    message += "\n\n" + get_prompt_template("code_generator_requirements").format(
+                        ROLE_NAME=ROLE_NAME,
+                        CODE_GENERATION_REQUIREMENTS=format_code_generation_requirements(
+                            ROLE_NAME, config
+                        ),
+                    )
+
+                messages.append(HumanMessage(content=message))
+            elif post.send_from in ["CodeVerifier", "CodeExecutor"] and post.send_to == "CodeGenerator":
+                # Self-correction
+                assert not is_first_post, "CodeVerifier and CodeExecutor should not be the first post."
+
+                if post.send_from == "CodeVerifier":
+                    message = (
+                        "The generated code has been verified and some errors are found. "
+                        "If you think you can fix the problem by rewriting the code, "
+                        "please do it and try again.\n"
+                        "Otherwise, please explain the problem to me."
+                    )
+                else:
+                    message = (
+                        "The execution of the previous generated code has failed. "
+                        "If you think you can fix the problem by rewriting the code, "
+                        "please generate code and run it again.\n"
+                        "Otherwise, please explain the problem to me."
+                    )
+
+                message = get_prompt_template("code_generator_user_message").format(
+                    FEEDBACK=format_feedback(post),
+                    MESSAGE=message,
+                )
+
+                if is_final_post and add_requirements:
+                    message += "\n\n" + get_prompt_template("code_generator_requirements").format(
                         ROLE_NAME=ROLE_NAME,
                         CODE_GENERATION_REQUIREMENTS=format_code_generation_requirements(
                             ROLE_NAME, config
@@ -294,14 +326,57 @@ def format_messages(rounds: list[Round], config: RunnableConfig):
                     for msg in post.original_messages
                 ]
                 messages += original_messages
+
+                if is_final_post:
+                    # This human message is added only for examples and context summarization
+                    message = get_prompt_template("code_generator_user_message").format(
+                        FEEDBACK=format_feedback(post),
+                        MESSAGE="This is the feedback.",
+                    )
+                    messages.append(HumanMessage(content=message))
             elif post.send_from == "CodeVerifier" and post.send_to == "CodeExecutor":
-                ...
+                # Ignore this post.
+                pass
             elif post.send_from == "CodeExecutor" and post.send_to == "Planner":
-                ...
+                # Ignore this post.
+                pass
             else:
                 raise ValueError(f"Invalid post ({post.send_from} -> {post.send_to}): {post}")
 
             last_post = post
+
+    return messages
+
+
+def format_messages(
+    rounds: list[Round],
+    config: RunnableConfig,
+    plugins: list[str] | None = None,
+    examples: list[Example] | None = None,
+):
+    messages = []
+
+    system_message = get_prompt_template("code_generator_system_message").format(
+        ENVIRONMENT_CONTEXT=get_env_context(),
+        ROLE_NAME=ROLE_NAME,
+    )
+
+    # TODO: add experiences to the system message
+
+    messages.append(SystemMessage(content=system_message))
+
+    if examples is not None:
+        for example in examples:
+            messages += format_conversation(
+                example.rounds, config, plugins=example.plugins, add_requirements=False
+            )
+
+    # TODO: compress history rounds if needed
+    summary = None
+
+    messages += format_conversation(
+        rounds, config, plugins=plugins, add_requirements=True, summary=summary
+    )
 
     return messages
 
@@ -324,12 +399,12 @@ def code_generator_node(state: CodeInterpreterState, config: RunnableConfig):
     revise_message = None
 
     if parsing_error is not None:
-        revise_message = f"Parsing error:\n{parsing_error}\n\nPlease regenerate the code."
+        revise_message = f"Parsing error:\n{parsing_error}\n\nPlease try again."
 
     if cg_result.reply_type not in ["python", "text"]:
         revise_message = (
             f"Unsupported reply_type: `{cg_result.reply_type}`. Please check the `reply_type` field. "
-            "Only `python` and `text` are supported."
+            "Only `python` and `text` are supported. Please try again."
         )
 
     assert len(raw_message.tool_calls) == 1, f"Invalid tool call count: {len(raw_message.tool_calls)}"

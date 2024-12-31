@@ -65,7 +65,6 @@ class Environment:
         self.env_dir = env_dir
 
         self.session_dict: dict[str, Session] = {}
-        self._client: BlockingKernelClient | None = None
 
         self.kernel_manager = SciMateMultiKernelManager(
             default_kernel_name="scimate",
@@ -127,7 +126,7 @@ class Environment:
         session.kernel_status = "ready"
 
     def stop_session(self, session_id: str) -> None:
-        self._clean_client()
+        self._cleanup_client(session_id)
 
         session = self._get_session(session_id)
         if session is None:
@@ -278,11 +277,12 @@ class Environment:
         )
 
     def _get_client(self, session_id: str) -> BlockingKernelClient:
-        if self._client is None:
-            session = self._get_session(session_id)
-            if session is None:
-                raise ValueError(f"Session {session_id} not found")
+        session = self._get_session(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
 
+
+        if session.client is None:
             connection_file = self._get_connection_file(session_id, session.kernel_id)
             client = BlockingKernelClient(connection_file=connection_file)
             client.load_connection_file()
@@ -290,14 +290,18 @@ class Environment:
             client.wait_for_ready(timeout=30)
             client.start_channels()
 
-            self._client = client
+            session.client = client
 
-        return self._client
+        return session.client
 
-    def _clean_client(self) -> None:
-        if self._client is not None:
-            self._client.stop_channels()
-            self._client = None
+    def _cleanup_client(self, session_id: str) -> None:
+        session = self._get_session(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+
+        if session.client is not None:
+            session.client.stop_channels()
+            session.client = None
 
     def _execute_code_on_kernel(
         self,
@@ -514,8 +518,5 @@ class Environment:
                             preview=artifact_dict["preview"],
                         )
                         result.artifacts.append(artifact)
-                else:
-                    if value:
-                        logger.warning(f"Unhandled extra result key: {key}")
 
         return result
