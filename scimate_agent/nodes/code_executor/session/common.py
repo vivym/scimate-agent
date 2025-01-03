@@ -15,7 +15,7 @@ ResultMimeType = Union[
 @dataclass
 class Plugin:
     name: str
-    code: str
+    package: str
     config: dict[str, str] | None
     loaded: bool = False
 

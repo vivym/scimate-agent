@@ -163,6 +163,15 @@ def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> d
 
     session_client = get_session_client(env_id=env_id, env_dir=env_dir, session_id=session_id)
 
+    for plugin in state.plugins:
+        if plugin.enabled:
+            session_client.load_plugin(
+                plugin_name=plugin.name,
+                plugin_loader=plugin.load_plugin_package,
+                plugin_config=plugin.spec.configurations,
+                plugin_hashsum=plugin.hashsum,
+            )
+
     result = session_client.execute_code(exec_id=f"{session_id}-{last_round.id}", code=code)
 
     self_correction_count = state.self_correction_count

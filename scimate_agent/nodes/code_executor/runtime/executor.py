@@ -1,4 +1,7 @@
+import base64
 import os
+import io
+import tarfile
 import tempfile
 import traceback
 from dataclasses import dataclass, field
@@ -18,7 +21,7 @@ class PluginTestEntry:
 @dataclass
 class PluginRuntime:
     name: str
-    code: str
+    package: str
     config: dict[str, Any] | None = None
     loaded: bool = False
 
@@ -27,7 +30,7 @@ class PluginRuntime:
 
     @property
     def module_name(self) -> str:
-        return f"scimate_agent.plugins.{self.name}"
+        return f"scimate_plugins.{self.name}"
 
     def load(self) -> None:
         if self.loaded:
@@ -63,9 +66,12 @@ class PluginRuntime:
 
             module_name = self.module_name
             with tempfile.TemporaryDirectory() as tmpdir:
-                module_path = os.path.join(tmpdir, f"{self.name}.py")
-                with open(module_path, "w") as f:
-                    f.write(self.code)
+                package_bytes = base64.b64decode(self.package)
+
+                with tarfile.open(fileobj=io.BytesIO(package_bytes), mode="r") as tar:
+                    tar.extractall(tmpdir)
+
+                module_path = os.path.join(tmpdir, "plugin", f"__init__.py")
 
                 spec = importlib.util.spec_from_file_location(module_name, module_path)
                 module = importlib.util.module_from_spec(spec)
@@ -202,11 +208,11 @@ class Executor:
             "outputs": self.ctx.get_normalized_output(),
         }
 
-    def register_plugin(self, plugin_name: str, plugin_code: str) -> None:
+    def register_plugin(self, plugin_name: str, plugin_package: str) -> None:
         if plugin_name in self.plugin_registry:
             self.log("warning", f"Plugin `{plugin_name}` already registered.")
 
-        plugin = PluginRuntime(name=plugin_name, code=plugin_code)
+        plugin = PluginRuntime(name=plugin_name, package=plugin_package)
         plugin.load()
 
         self.plugin_registry[plugin_name] = plugin

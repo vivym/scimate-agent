@@ -23,9 +23,9 @@ class SciMatePluginMagic(Magics):
     @line_cell_magic
     def _scimate_register_plugin(self, line: str, cell: str) -> dict[str, Any]:
         plugin_name = line.strip()
-        plugin_code = cell
+        plugin_package = cell
         try:
-            self.executor.register_plugin(plugin_name, plugin_code)
+            self.executor.register_plugin(plugin_name, plugin_package)
             return fmt_response(
                 True,
                 f"Plugin `{plugin_name}` registered successfully.",

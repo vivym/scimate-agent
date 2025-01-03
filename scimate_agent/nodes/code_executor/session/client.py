@@ -1,3 +1,5 @@
+from typing import Callable
+
 from .common import ExecutionResult
 from .environment import Environment
 
@@ -15,6 +17,8 @@ class SessionClient:
         self.session_dir = session_dir
         self.cwd = cwd
 
+        self.loaded_plugins = set()
+
     def start(self) -> None:
         self.env.start_session(self.session_id, self.session_dir, self.cwd)
 
@@ -24,15 +28,22 @@ class SessionClient:
     def load_plugin(
         self,
         plugin_name: str,
-        plugin_code: str,
+        plugin_loader: Callable[[], bytes],
         plugin_config: dict[str, str] | None = None,
+        plugin_hashsum: str | None = None,
     ) -> None:
+        if plugin_hashsum is not None and plugin_hashsum in self.loaded_plugins:
+            return
+
         self.env.load_plugin(
             session_id=self.session_id,
             plugin_name=plugin_name,
-            plugin_code=plugin_code,
+            plugin_loader=plugin_loader,
             plugin_config=plugin_config,
         )
+
+        if plugin_hashsum is not None:
+            self.loaded_plugins.add(plugin_hashsum)
 
     def test_plugin(self, plugin_name: str) -> None:
         self.env.test_plugin(self.session_id, plugin_name)

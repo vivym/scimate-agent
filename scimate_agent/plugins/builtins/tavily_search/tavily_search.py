@@ -17,6 +17,7 @@ class TavilySearch(Plugin):
     def __call__(
         self,
         query: str,
+        include_url: bool = False,
         search_depth: Literal["basic", "advanced"] = "advanced",
         topic: Literal["general", "news"] = "general",
         max_results: int = 5,
@@ -31,12 +32,17 @@ class TavilySearch(Plugin):
             max_results=max_results,
         )
 
-        return [
+        results = [
             {
-                "url": result["url"],
                 "title": result["title"],
                 "content": result["content"],
                 "score": result["score"],
             }
             for result in resp["results"]
         ]
+
+        if include_url:
+            for result, original_result in zip(results, resp["results"]):
+                result["url"] = original_result["url"]
+
+        return results

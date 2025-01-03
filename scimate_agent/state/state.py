@@ -3,13 +3,14 @@ from typing import Annotated
 from pydantic import BaseModel
 
 from scimate_agent.role import Role
+from .plugin import PluginEntry
 from .round import Round, update_rounds
 
 
 class AgentState(BaseModel):
     rounds: Annotated[list[Round], update_rounds]
 
-    plugins: list
+    plugins: list[PluginEntry]
 
     planner_self_correction_count: int | None = None
 
@@ -17,7 +18,7 @@ class AgentState(BaseModel):
     def new_initial_state(
         cls,
         user_query: str,
-        plugins: list | None = None,
+        plugins: list[PluginEntry] | None = None,
     ) -> "AgentState":
         return cls(
             rounds=[Round.new(user_query)],
@@ -46,6 +47,8 @@ class AgentState(BaseModel):
 
 class CodeInterpreterState(BaseModel):
     rounds: Annotated[list[Round], update_rounds]
+
+    plugins: list[PluginEntry]
 
     self_correction_count: int | None = None
 

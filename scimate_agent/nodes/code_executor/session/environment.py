@@ -1,10 +1,11 @@
+import base64
 import json
 import logging
 import os
 import site
 import sys
 from ast import literal_eval
-from typing import Any, Literal, Union
+from typing import Any, Callable, Literal, Union
 
 from jupyter_client.blocking.client import BlockingKernelClient
 from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
@@ -195,21 +196,25 @@ class Environment:
         self,
         session_id: str,
         plugin_name: str,
-        plugin_code: str,
+        plugin_loader: Callable[[], bytes],
         plugin_config: dict[str, str] | None = None,
     ) -> None:
         session = self._get_session(session_id)
         if session is None:
             raise ValueError(f"Session {session_id} not found")
+        # TODO: Use hashsum to check if the plugin is already loaded
         if plugin_name in session.plugins:
             prev_plugin = session.plugins[plugin_name]
             if prev_plugin.loaded:
                 self._cmd_unload_plugin(session, prev_plugin)
             del session.plugins[plugin_name]
 
+        package_bytes = plugin_loader()
+        package_str = base64.b64encode(package_bytes).decode("utf-8")
+
         plugin = Plugin(
             name=plugin_name,
-            code=plugin_code,
+            package=package_str,
             config=plugin_config,
         )
         self._cmd_load_plugin(session, plugin)
@@ -425,7 +430,7 @@ class Environment:
     def _cmd_load_plugin(self, session: Session, plugin: Plugin) -> None:
         self._execute_control_code_on_kernel(
             session_id=session.session_id,
-            code=f"%%_scimate_register_plugin {plugin.name}\n{plugin.code}",
+            code=f"%%_scimate_register_plugin {plugin.name}\n{plugin.package}",
         )
         self._execute_control_code_on_kernel(
             session_id=session.session_id,

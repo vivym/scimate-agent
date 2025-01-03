@@ -1,0 +1,50 @@
+name: tavily_search
+enabled: true
+description: >-
+  Tavily Search API is a web search engine optimized for LLMs,
+  optimized for a factual, efficient, and persistent search experience.
+examples:
+  - results = tavily_search("What is the capital of France?")
+  - results = tavily_search("Negative sentiment in the 2024 US presidential election", search_depth="advanced", topic="news", max_results=10)
+
+parameters:
+  - name: query
+    type: str
+    required: true
+    description: The query to search for.
+  - name: include_url
+    type: bool
+    required: false
+    description: Whether to include the URL in the search results.
+    default: false
+  - name: search_depth
+    type: str
+    choices:
+      - basic
+      - advanced
+    required: false
+    description: The depth of the search. It can be "basic" or "advanced".
+    default: basic
+  - name: topic
+    type: str
+    choices:
+      - general
+      - news
+    required: false
+    description: The category of the search. It can be "general" or "news".
+    default: general
+  - name: max_results
+    type: int
+    required: false
+    description: The maximum number of search results to return.
+    default: 5
+
+returns:
+  - name: results
+    type: list[dict[str, Any]]
+    description: |-
+      A list of sorted search results ranked by relevance. Each result is a dictionary with the following keys:
+      - url: The URL of the search result.
+      - title: The title of the search result.
+      - content: The most query related content from the scraped URL
+      - score: The relevance score of the search result.

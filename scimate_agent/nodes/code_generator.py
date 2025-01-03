@@ -18,6 +18,7 @@ from scimate_agent.state import (
     Attachment,
     AttachmentType,
     CodeInterpreterState,
+    PluginEntry,
     Post,
     Round,
     RoundUpdate,
@@ -211,7 +212,7 @@ def format_code_generation_requirements(role_name: str, config: RunnableConfig) 
 def format_conversation(
     rounds: list[Round],
     config: RunnableConfig,
-    plugins: list[str] | None = None,
+    plugins: list[PluginEntry] | None = None,
     add_requirements: bool = False,
     summary: str | None = None,
 ):
@@ -219,7 +220,7 @@ def format_conversation(
 
     conv_prefix = get_prompt_template("code_generator_conv_head").format(
         SUMMARY=summary if summary is not None else "None",
-        PLUGINS="\n".join(plugins) if plugins is not None else "None",
+        PLUGINS="\n".join([p.format_prompt() for p in plugins]) if plugins else "None",
         ROLE_NAME=ROLE_NAME,
     )
 
@@ -351,9 +352,9 @@ def format_conversation(
 def format_messages(
     rounds: list[Round],
     config: RunnableConfig,
-    plugins: list[str] | None = None,
+    plugins: list[PluginEntry] | None = None,
     examples: list[Example] | None = None,
-):
+) -> list[BaseMessage]:
     messages = []
 
     system_message = get_prompt_template("code_generator_system_message").format(
@@ -387,7 +388,7 @@ def code_generator_node(state: CodeInterpreterState, config: RunnableConfig):
 
     current_round = rounds[-1]
 
-    messages = format_messages(rounds, config)
+    messages = format_messages(rounds, config, plugins=state.plugins)
 
     llm = get_code_generator_llm(config)
     result: dict[Literal["raw", "parsed", "parsing_error"], Any] = llm.invoke(messages)
