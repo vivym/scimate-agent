@@ -115,7 +115,7 @@ class PluginSpec(BaseModel):
     configurations: dict[str, Any] = Field(default_factory=dict)
 
     def format_description(self, indent: int = 0) -> str:
-        desc = f"{'-' * indent}- {self.name}: {self.description}"
+        desc = f"{' ' * indent}- {self.name}: {self.description}"
 
         required_params = [
             f"{p.name}: {p.type}"

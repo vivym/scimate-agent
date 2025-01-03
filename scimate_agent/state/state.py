@@ -12,7 +12,7 @@ class AgentState(BaseModel):
 
     plugins: list[PluginEntry]
 
-    planner_self_correction_count: int | None = None
+    self_correction_count: int | None = None
 
     @classmethod
     def new_initial_state(

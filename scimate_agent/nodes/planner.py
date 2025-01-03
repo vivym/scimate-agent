@@ -17,6 +17,7 @@ from scimate_agent.state import (
     AgentState,
     Attachment,
     AttachmentType,
+    PluginEntry,
     Post,
     Round,
     RoundUpdate,
@@ -115,13 +116,17 @@ def get_planner_llm(config: RunnableConfig):
     return _get_planner_llm(llm_vendor, llm_model, llm_temperature)
 
 
-def format_messages(rounds: list[Round]) -> list[BaseMessage]:
+def format_messages(rounds: list[Round], plugins: list[PluginEntry]) -> list[BaseMessage]:
     messages = []
+
+    if plugins:
+        plugins_desc = "\n".join([p.format_description(indent=4) for p in plugins])
+    else:
+        plugins_desc = "None"
 
     system_message = get_prompt_template("planner_system_message").format(
         ENVIRONMENT_CONTEXT=get_env_context(),
-        # TODO: correct the prompt
-        PLUGINS_DESCRIPTION="None",
+        PLUGINS_DESCRIPTION=plugins_desc,
     )
 
     # TODO: add experiences to the system message
@@ -159,7 +164,13 @@ def planner_node(state: AgentState, config: RunnableConfig):
 
     current_round = rounds[-1]
 
-    messages = format_messages(rounds)
+    messages = format_messages(rounds, state.plugins)
+
+    for msg in messages:
+        print("-" * 80)
+        print(msg.type)
+        print(msg.content)
+        print("-" * 80)
 
     llm = get_planner_llm(config)
     result: dict[Literal["raw", "parsed", "parsing_error"], Any] = llm.invoke(messages)
@@ -168,15 +179,19 @@ def planner_node(state: AgentState, config: RunnableConfig):
     plan: Plan = result["parsed"]
     parsing_error: BaseException | None = result["parsing_error"]
 
+    print("-" * 80)
+    print(plan.model_dump_json(indent=4))
+    print("-" * 80)
+
     revise_message = None
 
     if parsing_error is not None:
         revise_message = f"Parsing error:\n{parsing_error}\n\nPlease regenerate the plan."
 
-    if plan.send_to not in ["User", "CodeGenerator"]:
+    if plan.send_to not in ["User", "CodeInterpreter"]:
         revise_message = (
             f"Unsupported send_to: `{plan.send_to}`. Please check the `send_to` field. "
-            "Only `User` and `CodeGenerator` are supported."
+            "Only `User` and `CodeInterpreter` are supported."
         )
 
     assert len(raw_message.tool_calls) == 1, f"Invalid tool call count: {len(raw_message.tool_calls)}"
@@ -189,13 +204,13 @@ def planner_node(state: AgentState, config: RunnableConfig):
         )
     ]
 
-    self_correction_count = state.planner_self_correction_count
+    self_correction_count = state.self_correction_count
 
     if revise_message is not None:
         # Self-correction. Max 3 times.
         posts.append(
             Post.new(
-                send_from="Validator",  # TODO: Plan Validator?
+                send_from="Reviser",
                 send_to="Planner",
                 message=revise_message,
             )
@@ -210,7 +225,7 @@ def planner_node(state: AgentState, config: RunnableConfig):
             id=current_round.id,
             posts=posts,
         ),
-        "planner_self_correction_count": self_correction_count,
+        "self_correction_count": self_correction_count,
     }
 
 
@@ -223,24 +238,24 @@ def planner_router_edge(state: AgentState) -> str:
         raise ValueError("No post found for Planner.")
     last_post = last_round.posts[-1]
 
-    assert last_post.send_from in ["Planner", "Validator"], (
-        "Last post is not from Planner or Validator."
+    assert last_post.send_from in ["Planner", "Reviser"], (
+        "Last post is not from Planner or Reviser."
     )
 
     if last_post.send_from == "Planner":
         if last_post.send_to == "User":
             return "human_node"
-        elif last_post.send_to == "CodeGenerator":
+        elif last_post.send_to == "CodeInterpreter":
             return "code_generator_node"
         else:
             raise ValueError(f"Unsupported send_to: {last_post.send_to}")
     else:
-        # From `Validator`, self-correction
+        # From `Reviser`, self-correction
         assert last_post.send_to == "Planner", (
-            f"Validator must send to Planner, but got `{last_post.send_to}`."
+            f"Reviser must send to Planner, but got `{last_post.send_to}`."
         )
 
-        self_correction_count = state.planner_self_correction_count
+        self_correction_count = state.self_correction_count
         if self_correction_count is None or self_correction_count <= 3:
             return "planner_node"
         else:

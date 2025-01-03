@@ -1,5 +1,3 @@
-from langgraph.types import interrupt
-
 from scimate_agent.interrupt import Interruption
 from scimate_agent.state import AgentState
 
