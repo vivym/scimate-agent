@@ -37,7 +37,6 @@ def create_scimate_agent_graph() -> CompiledStateGraph:
         },
     )
     graph_builder.add_edge("code_interpreter_node", "planner_node")
-    graph_builder.add_edge("human_node", "planner_node")
 
     checkpointer = MemorySaver()
 

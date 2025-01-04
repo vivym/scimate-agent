@@ -1,9 +1,15 @@
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from langgraph.types import interrupt
 from pydantic import BaseModel
 
 INTERRUPTION_REASON = Literal["greeting", "ask_user"]
+
+
+@dataclass
+class ExitCommand:
+    ...
 
 
 class Interruption(BaseModel):
