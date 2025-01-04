@@ -137,9 +137,9 @@ def format_feedback(post: Post | None) -> str:
             is_success = execution_result.extra.is_success
 
         if is_success:
-            feedback += f"## Execution\nYour code has been executed successfully with the following result:\n"
+            feedback += f"## Execution\nThe code has been executed successfully with the following result:\n"
         else:
-            feedback += f"## Execution\nYour code has failed to execute with the following error:\n"
+            feedback += f"## Execution\nThe code has failed to execute with the following error:\n"
         feedback += f"{execution_result.content}\n"
 
     if feedback == "":

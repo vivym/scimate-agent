@@ -9,27 +9,14 @@ from .nodes import (
     code_executor_router_edge,
     code_generator_node,
     code_generator_router_edge,
+    code_interpreter_node,
     code_verifier_node,
     code_verifier_router_edge,
+    human_node,
     planner_node,
     planner_router_edge,
 )
 from .state import AgentState, CodeInterpreterState
-
-
-def code_interpreter_node(state: AgentState) -> dict[str, Any]:
-    # TODO: Implement code interpreter node
-    # input: Post (Planner -> CodeInterpreter)
-    # output: Post (CodeInterpreter -> Planner)
-    # Parent graph does not care about the posts between the nodes inside the code interpreter graph
-    result = code_interpreter_graph.invoke()
-
-    return {}
-
-
-def human_node(state: AgentState) -> dict[str, Any]:
-    print("Dummy Human Node")
-    return {}
 
 
 def create_scimate_agent_graph() -> CompiledStateGraph:
@@ -50,8 +37,7 @@ def create_scimate_agent_graph() -> CompiledStateGraph:
         },
     )
     graph_builder.add_edge("code_interpreter_node", "planner_node")
-    # TODO: Add a router edge to the planner node
-    graph_builder.add_edge("human_node", END)
+    graph_builder.add_edge("human_node", "planner_node")
 
     checkpointer = MemorySaver()
 

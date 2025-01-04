@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Any, Literal
 
+from langchain_core.load import load as lc_load
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -146,7 +147,11 @@ def format_messages(rounds: list[Round], plugins: list[PluginEntry]) -> list[Bas
 
             if post.send_from == "Planner":
                 assert post.original_messages is not None, "Original messages are required for Planner."
-                messages += post.original_messages
+                original_messages = [
+                    lc_load(msg)
+                    for msg in post.original_messages
+                ]
+                messages += original_messages
             else:
                 if rnd_idx == 0 and post_idx == 0:
                     message = f"{conv_prefix}\n{post.message}"
@@ -166,22 +171,12 @@ def planner_node(state: AgentState, config: RunnableConfig):
 
     messages = format_messages(rounds, state.plugins)
 
-    for msg in messages:
-        print("-" * 80)
-        print(msg.type)
-        print(msg.content)
-        print("-" * 80)
-
     llm = get_planner_llm(config)
     result: dict[Literal["raw", "parsed", "parsing_error"], Any] = llm.invoke(messages)
 
     raw_message: AIMessage = result["raw"]
     plan: Plan = result["parsed"]
     parsing_error: BaseException | None = result["parsing_error"]
-
-    print("-" * 80)
-    print(plan.model_dump_json(indent=4))
-    print("-" * 80)
 
     revise_message = None
 
@@ -246,7 +241,7 @@ def planner_router_edge(state: AgentState) -> str:
         if last_post.send_to == "User":
             return "human_node"
         elif last_post.send_to == "CodeInterpreter":
-            return "code_generator_node"
+            return "code_interpreter_node"
         else:
             raise ValueError(f"Unsupported send_to: {last_post.send_to}")
     else:

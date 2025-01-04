@@ -262,7 +262,9 @@ class Environment:
     ) -> Session | None:
         if session_id not in self.session_dict and session_dir is not None:
             session_dir = session_dir or self.get_default_session_dir(session_id)
+            session_dir = os.path.abspath(session_dir)
             cwd = cwd or os.path.join(session_dir, "cwd")
+            cwd = os.path.abspath(cwd)
             new_session = Session(
                 session_id=session_id,
                 session_dir=session_dir,

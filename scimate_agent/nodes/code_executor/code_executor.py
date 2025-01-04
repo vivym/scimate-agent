@@ -1,3 +1,4 @@
+import base64
 import os
 from pathlib import Path
 from typing import Any
@@ -5,6 +6,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 
+from scimate_agent.plugins import ArtifactType
 from scimate_agent.state import Attachment, AttachmentType, CodeInterpreterState, Post, RoundUpdate
 from .session import ExecutionResult, SessionManager, SessionClient
 from .utils import get_id
@@ -32,10 +34,32 @@ def get_session_client(env_id: str | None, env_dir: str | None, session_id: str 
     return SESSION_CLIENT_CACHE[cache_key]
 
 
-def get_artifact_uri(execution_id: str, file: str, use_local_uri: bool) -> str:
+def get_artifact_uri(file_path: str, use_local_uri: bool) -> str:
+    if use_local_uri:
+        assert os.path.isabs(file_path)
+
     return (
-        Path(os.path.join("workspace", execution_id, file)).as_uri() if use_local_uri else f"http://artifact-ref/{file}"
+        Path(file_path).as_uri() if use_local_uri else f"http://artifact-ref/{file_path}"
     )
+
+
+def get_default_artifact_name(artifact_type: ArtifactType, mime_type: str) -> str:
+    if artifact_type == "file":
+        return "artifact"
+    if artifact_type == "image":
+        if mime_type == "image/png":
+            return "image.png"
+        if mime_type == "image/jpeg":
+            return "image.jpg"
+        if mime_type == "image/gif":
+            return "image.gif"
+        if mime_type == "image/svg+xml":
+            return "image.svg"
+    if artifact_type == "chart":
+        return "chart.json"
+    if artifact_type == "svg":
+        return "svg.svg"
+    return "file"
 
 
 def format_execution_result(
@@ -88,6 +112,7 @@ def format_execution_result(
             lines.append(
                 "The execution is successful but no output is generated.",
             )
+        lines.append("")
 
     # console output when execution failed
     if not result.is_success:
@@ -112,11 +137,10 @@ def format_execution_result(
                 f"- type: {a.type} ; uri: "
                 + (
                     get_artifact_uri(
-                        execution_id=result.execution_id,
-                        file=(
+                        file_path=(
                             a.file_name
                             if os.path.isabs(a.file_name) or not use_local_uri
-                            else os.path.join(result.cwd, a.file_name)
+                            else os.path.join(result.cwd, "artifacts", a.file_name)
                         ),
                         use_local_uri=use_local_uri,
                     )
@@ -173,17 +197,41 @@ def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> d
 
     result = session_client.execute_code(exec_id=f"{session_id}-{last_round.id}", code=code)
 
+    if result.is_success:
+        for artifact in result.artifacts:
+            if artifact.file_name is None:
+                original_name = (
+                    artifact.original_name
+                    if artifact.original_name is not None
+                    else get_default_artifact_name(
+                        artifact.type,
+                        artifact.mime_type,
+                    )
+                )
+                file_name = f"{artifact.name}_{original_name}"
+                file_path = os.path.join(result.cwd, "artifacts", file_name)
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+                if artifact.file_content_encoding == "base64":
+                    with open(file_path, "wb") as f:
+                        f.write(base64.b64decode(artifact.file_content))
+                else:
+                    with open(file_path, "w") as f:
+                        f.write(artifact.file_content)
+
+                artifact.file_name = file_name
+
     self_correction_count = state.self_correction_count
 
     if result.is_success:
         post = Post.new(
             send_from="CodeExecutor",
             send_to="Planner",
-            message=f"Your code has been executed successfully with the following result:\n{result.output}",
+            message=format_execution_result(result, with_code=True, use_local_uri=True),
             attachments=last_post.attachments + [
                 Attachment.new(
                     type=AttachmentType.CODE_EXECUTION_RESULT,
-                    content=format_execution_result(result, with_code=False),
+                    content=format_execution_result(result, with_code=False, use_local_uri=True),
                     extra=result,
                 )
             ],
@@ -201,7 +249,7 @@ def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> d
             attachments=last_post.attachments + [
                 Attachment.new(
                     type=AttachmentType.CODE_EXECUTION_RESULT,
-                    content=format_execution_result(result, with_code=False),
+                    content=format_execution_result(result, with_code=False, use_local_uri=True),
                     extra=result,
                 )
             ],

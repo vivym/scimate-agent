@@ -24,9 +24,6 @@ def load_ipython_extension(ipython: InteractiveShell):
     ctx_magic = SciMateContextMagic(ipython, executor)
     plugin_magic = SciMatePluginMagic(ipython, executor)
 
-    print("Loaded magics")
-    print("*" * 80)
-
     ipython.register_magics(ctx_magic)
     ipython.register_magics(plugin_magic)
     ipython.InteractiveTB.set_mode(mode="Plain")

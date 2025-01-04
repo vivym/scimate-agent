@@ -14,6 +14,11 @@ class AgentState(BaseModel):
 
     self_correction_count: int | None = None
 
+    # Execution kernel settings
+    env_id: str | None = None
+    env_dir: str | None = None
+    session_id: str | None = None
+
     @classmethod
     def new_initial_state(
         cls,
