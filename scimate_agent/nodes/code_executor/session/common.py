@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
 from jupyter_client.blocking.client import BlockingKernelClient
+from pydantic import BaseModel
 
 from scimate_agent.plugins import ArtifactType
 
@@ -43,8 +44,7 @@ class ExecutionResultInternal:
     error: str | None = None
 
 
-@dataclass
-class ExecutionArtifact:
+class ExecutionArtifact(BaseModel):
     name: str | None = None
     type: ArtifactType = "file"
     mime_type: str | None = None
@@ -55,8 +55,7 @@ class ExecutionArtifact:
     preview: str | None = None
 
 
-@dataclass
-class ExecutionResult:
+class ExecutionResult(BaseModel):
     exec_id: str
     code: str
 

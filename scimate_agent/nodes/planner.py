@@ -13,6 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
+from scimate_agent.event import EventEmitter
 from scimate_agent.prompts import get_prompt_template
 from scimate_agent.state import (
     AgentState,
@@ -163,7 +164,7 @@ def format_messages(rounds: list[Round], plugins: list[PluginEntry]) -> list[Bas
     return messages
 
 
-def planner_node(state: AgentState, config: RunnableConfig):
+async def planner_node(state: AgentState, config: RunnableConfig):
     rounds = state.get_rounds("Planner")
     assert len(rounds) > 0, "No round found for Planner."
 
@@ -172,11 +173,15 @@ def planner_node(state: AgentState, config: RunnableConfig):
     messages = format_messages(rounds, state.plugins)
 
     llm = get_planner_llm(config)
-    result: dict[Literal["raw", "parsed", "parsing_error"], Any] = llm.invoke(messages)
+    result: dict[Literal["raw", "parsed", "parsing_error"], Any] = await llm.ainvoke(messages)
 
     raw_message: AIMessage = result["raw"]
     plan: Plan = result["parsed"]
     parsing_error: BaseException | None = result["parsing_error"]
+
+    event_handle = config["configurable"].get("event_handle", None)
+    event_emitter = EventEmitter.get_instance(event_handle)
+    await event_emitter.emit("planner_result", plan.model_dump(mode="json"))
 
     revise_message = None
 
@@ -211,6 +216,8 @@ def planner_node(state: AgentState, config: RunnableConfig):
             )
         )
         self_correction_count = self_correction_count + 1 if self_correction_count is not None else 1
+
+        await event_emitter.emit("planner_revise_message", revise_message)
     else:
         # Reset self-correction count when the plan is correct.
         self_correction_count = None

@@ -2,8 +2,10 @@ import ast
 import re
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 
+from scimate_agent.event import EventEmitter
 from scimate_agent.state import Attachment, AttachmentType, CodeInterpreterState, Post, RoundUpdate
 
 LINE_MAGIC_PATTERN = re.compile(r"^\s*%\s*[a-zA-Z_]\w*")
@@ -200,7 +202,7 @@ def apply_code_verification(
     return errors
 
 
-def code_verifier_node(state: CodeInterpreterState) -> dict[str, Any]:
+async def code_verifier_node(state: CodeInterpreterState, config: RunnableConfig) -> dict[str, Any]:
     rounds = state.get_rounds()
     assert len(rounds) > 0, "No round found for CodeVerifier."
 
@@ -215,7 +217,12 @@ def code_verifier_node(state: CodeInterpreterState) -> dict[str, Any]:
 
     code = last_post.message
 
+    # TODO: verify code in background if the code is too long
     errors = apply_code_verification(code)
+
+    event_handle = config["configurable"].get("event_handle", None)
+    event_emitter = EventEmitter.get_instance(event_handle)
+    await event_emitter.emit("cv_result", errors)
 
     self_correction_count = state.self_correction_count
 

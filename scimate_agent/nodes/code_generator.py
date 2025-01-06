@@ -13,6 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
+from scimate_agent.event import EventEmitter
 from scimate_agent.prompts.prompt import get_prompt_template
 from scimate_agent.state import (
     Attachment,
@@ -382,7 +383,7 @@ def format_messages(
     return messages
 
 
-def code_generator_node(state: CodeInterpreterState, config: RunnableConfig):
+async def code_generator_node(state: CodeInterpreterState, config: RunnableConfig):
     rounds = state.get_rounds()
     assert len(rounds) > 0, "No round found for CodeGenerator."
 
@@ -391,11 +392,15 @@ def code_generator_node(state: CodeInterpreterState, config: RunnableConfig):
     messages = format_messages(rounds, config, plugins=state.plugins)
 
     llm = get_code_generator_llm(config)
-    result: dict[Literal["raw", "parsed", "parsing_error"], Any] = llm.invoke(messages)
+    result: dict[Literal["raw", "parsed", "parsing_error"], Any] = await llm.ainvoke(messages)
 
     raw_message: AIMessage = result["raw"]
     cg_result: CodeGenerationResult = result["parsed"]
     parsing_error: BaseException | None = result["parsing_error"]
+
+    event_handle = config["configurable"].get("event_handle", None)
+    event_emitter = EventEmitter.get_instance(event_handle)
+    await event_emitter.emit("cg_result", cg_result.model_dump(mode="json"))
 
     revise_message = None
 
@@ -431,6 +436,8 @@ def code_generator_node(state: CodeInterpreterState, config: RunnableConfig):
             )
         )
         self_correction_count = self_correction_count + 1 if self_correction_count is not None else 1
+
+        await event_emitter.emit("cg_revise_message", revise_message)
 
     return {
         "rounds": RoundUpdate(

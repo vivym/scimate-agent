@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 
+from scimate_agent.event import EventEmitter
 from scimate_agent.plugins import ArtifactType
 from scimate_agent.state import Attachment, AttachmentType, CodeInterpreterState, Post, RoundUpdate
 from .session import ExecutionResult, SessionManager, SessionClient
@@ -154,7 +155,7 @@ def format_execution_result(
     return "\n".join([" " * indent + line for line in lines])
 
 
-def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> dict[str, Any]:
+async def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> dict[str, Any]:
     rounds = state.get_rounds()
     assert len(rounds) > 0, "No round found for CodeExecutor."
 
@@ -171,9 +172,9 @@ def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> d
         # Initialize session manager and session client from `config`
         env_id = config["configurable"].get("env_id", None)
         env_dir = config["configurable"].get("env_dir", None)
-        session_id = config["configurable"].get("thread_id", None)
+        session_id = config["configurable"].get("session_id", None)
         if session_id is None:
-            raise ValueError("Thread ID is required.")
+            raise ValueError("Session ID is required.")
         session_id = str(session_id)
     else:
         env_id = state.env_id
@@ -220,6 +221,10 @@ def code_executor_node(state: CodeInterpreterState, config: RunnableConfig) -> d
                         f.write(artifact.file_content)
 
                 artifact.file_name = file_name
+
+    event_handle = config["configurable"].get("event_handle", None)
+    event_emitter = EventEmitter.get_instance(event_handle)
+    await event_emitter.emit("code_executor_result", result.model_dump(mode="json"))
 
     self_correction_count = state.self_correction_count
 

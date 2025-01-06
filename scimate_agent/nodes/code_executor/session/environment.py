@@ -288,7 +288,6 @@ class Environment:
         if session is None:
             raise ValueError(f"Session {session_id} not found")
 
-
         if session.client is None:
             connection_file = self._get_connection_file(session_id, session.kernel_id)
             client = BlockingKernelClient(connection_file=connection_file)

@@ -5,7 +5,7 @@ from langchain_core.runnables import RunnableConfig
 from scimate_agent.state import AgentState, CodeInterpreterState, Round, RoundUpdate
 
 
-def code_interpreter_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
+async def code_interpreter_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
     rounds = state.get_rounds("CodeInterpreter")
     assert len(rounds) > 0, "No round found for CodeInterpreter."
 
@@ -37,7 +37,7 @@ def code_interpreter_node(state: AgentState, config: RunnableConfig) -> dict[str
 
     from scimate_agent.agent import code_interpreter_graph
 
-    result = code_interpreter_graph.invoke(
+    result = await code_interpreter_graph.ainvoke(
         ci_state,
         config=config,
     )
