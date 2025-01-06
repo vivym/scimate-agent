@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import os
 from pathlib import Path
@@ -17,20 +18,29 @@ TRUNCATE_CHAR_LENGTH = 1000
 SESSION_CLIENT_CACHE = {}
 
 
-def get_session_client(env_id: str | None, env_dir: str | None, session_id: str | None) -> SessionClient:
+async def get_session_client(
+    env_id: str | None,
+    env_dir: str | None,
+    session_id: str | None,
+    create_if_not_exists: bool = True,
+) -> SessionClient:
     cache_key = (env_id, env_dir, session_id)
 
     if cache_key not in SESSION_CLIENT_CACHE:
+        if not create_if_not_exists:
+            raise ValueError("Session client not found.")
+
         session_mgr = SessionManager(env_id=env_id, env_dir=env_dir)
         if session_id is None:
             session_id = get_id(prefix="sess")
 
         session_client = session_mgr.get_session_client(session_id=session_id)
-        session_client.start()
+        await session_client.start()
 
         cache_key = (session_mgr.env_id, session_mgr.env_dir, session_id)
 
         SESSION_CLIENT_CACHE[cache_key] = session_client
+
 
     return SESSION_CLIENT_CACHE[cache_key]
 
@@ -185,7 +195,14 @@ async def code_executor_node(state: CodeInterpreterState, config: RunnableConfig
         assert env_dir is not None, "Environment directory is required."
         assert session_id is not None, "Session ID is required."
 
-    session_client = get_session_client(env_id=env_id, env_dir=env_dir, session_id=session_id)
+    session_client = await get_session_client(
+        env_id=env_id,
+        env_dir=env_dir,
+        session_id=session_id,
+    )
+
+    event_handle = config["configurable"].get("event_handle", None)
+    event_emitter = EventEmitter.get_instance(event_handle)
 
     for plugin in state.plugins:
         if plugin.enabled:
@@ -196,34 +213,51 @@ async def code_executor_node(state: CodeInterpreterState, config: RunnableConfig
                 plugin_hashsum=plugin.hashsum,
             )
 
-    result = session_client.execute_code(exec_id=f"{session_id}-{last_round.id}", code=code)
+    await event_emitter.emit(
+        "code_executor_start",
+        {
+            "env_id": env_id,
+            "env_dir": env_dir,
+            "session_id": session_id,
+            "exec_id": f"{session_id}-{last_round.id}",
+            "code": code,
+        },
+    )
 
-    if result.is_success:
-        for artifact in result.artifacts:
-            if artifact.file_name is None:
-                original_name = (
-                    artifact.original_name
-                    if artifact.original_name is not None
-                    else get_default_artifact_name(
-                        artifact.type,
-                        artifact.mime_type,
-                    )
+    result = await session_client.execute_code(
+        exec_id=f"{session_id}-{last_round.id}",
+        code=code,
+    )
+
+    for artifact in result.artifacts:
+        if artifact.file_name is None:
+            original_name = (
+                artifact.original_name
+                if artifact.original_name is not None
+                else get_default_artifact_name(
+                    artifact.type,
+                    artifact.mime_type,
                 )
-                file_name = f"{artifact.name}_{original_name}"
-                file_path = os.path.join(result.cwd, "artifacts", file_name)
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            )
+            file_name = f"{artifact.name}_{original_name}"
+            file_path = os.path.join(result.cwd, "artifacts", file_name)
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-                if artifact.file_content_encoding == "base64":
+            if artifact.file_content_encoding == "base64":
+                def sync_write():
                     with open(file_path, "wb") as f:
                         f.write(base64.b64decode(artifact.file_content))
-                else:
+
+                await asyncio.to_thread(sync_write)
+            else:
+                def sync_write():
                     with open(file_path, "w") as f:
                         f.write(artifact.file_content)
 
-                artifact.file_name = file_name
+                await asyncio.to_thread(sync_write)
 
-    event_handle = config["configurable"].get("event_handle", None)
-    event_emitter = EventEmitter.get_instance(event_handle)
+            artifact.file_name = file_name
+
     await event_emitter.emit("code_executor_result", result.model_dump(mode="json"))
 
     self_correction_count = state.self_correction_count
@@ -246,7 +280,6 @@ async def code_executor_node(state: CodeInterpreterState, config: RunnableConfig
         self_correction_count = None
     else:
         # Self-correct the code
-        # TODO: make sure this is correct
         post = Post.new(
             send_from="CodeExecutor",
             send_to="CodeGenerator",

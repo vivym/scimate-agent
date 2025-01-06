@@ -1,3 +1,4 @@
+import copy
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -37,9 +38,17 @@ async def code_interpreter_node(state: AgentState, config: RunnableConfig) -> di
 
     from scimate_agent.agent import code_interpreter_graph
 
+    subgraph_thread_id = str(config["configurable"]["thread_id"]) + "-ci"
+    subgraph_config = {
+        "configurable": {
+            **config["configurable"],
+            "thread_id": subgraph_thread_id,
+        }
+    }
+
     result = await code_interpreter_graph.ainvoke(
         ci_state,
-        config=config,
+        config=subgraph_config,
     )
     final_state = CodeInterpreterState(**result)
 

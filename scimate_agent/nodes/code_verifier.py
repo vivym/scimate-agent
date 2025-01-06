@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import re
 from typing import Any
 
@@ -217,8 +218,7 @@ async def code_verifier_node(state: CodeInterpreterState, config: RunnableConfig
 
     code = last_post.message
 
-    # TODO: verify code in background if the code is too long
-    errors = apply_code_verification(code)
+    errors = await asyncio.to_thread(apply_code_verification, code)
 
     event_handle = config["configurable"].get("event_handle", None)
     event_emitter = EventEmitter.get_instance(event_handle)

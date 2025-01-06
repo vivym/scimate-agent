@@ -80,16 +80,3 @@ class CodeInterpreterState(BaseModel):
             rounds.append(new_round)
 
         return rounds
-
-    def cleanup(self):
-        if self.env_id is not None:
-            from scimate_agent.nodes.code_executor import get_session_client
-
-            assert self.env_dir is not None, "Internal error: env_dir is None"
-            assert self.session_id is not None, "Internal error: session_id is None"
-            client = get_session_client(env_id=self.env_id, env_dir=self.env_dir, session_id=self.session_id)
-            client.stop()
-
-        self.env_id = None
-        self.env_dir = None
-        self.session_id = None

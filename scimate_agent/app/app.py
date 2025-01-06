@@ -6,6 +6,8 @@ from socketio import AsyncServer
 from scimate_agent.agent import scimate_agent_graph
 from scimate_agent.event import EventEmitter
 from scimate_agent.interrupt import Interruption
+from scimate_agent.nodes.code_executor import get_session_client
+from scimate_agent.nodes.code_executor.code_executor import SESSION_CLIENT_CACHE
 from scimate_agent.state import AgentState, Post, Round
 
 SessionState = Literal["idle", "running"]
@@ -16,6 +18,7 @@ class Session:
     session_id: str
     env_id: str
     env_dir: str
+    ce_session_id: str | None
     state: SessionState
 
 
@@ -29,11 +32,16 @@ class SciMateAgentApp:
             session_id=sid,
             env_id="debug",
             env_dir="tmp/workspace",
+            ce_session_id=None,
             state="idle",
         )
 
         async def on_event(event_name: str, data: Any):
-            print(f"event_name: {event_name}, data: {data}")
+            if event_name == "code_executor_start":
+                session = self.sessions[sid]
+                session.env_id = data["env_id"]
+                session.env_dir = data["env_dir"]
+                session.ce_session_id = data["session_id"]
 
             await self.sio.emit(
                 "event",
@@ -47,7 +55,21 @@ class SciMateAgentApp:
     async def on_disconnect(self, sid):
         EventEmitter.remove_instance(sid)
 
-        # TODO: clean up the session
+        session = self.sessions[sid]
+
+        # Stop the execution session
+        if session.ce_session_id is not None:
+            assert session.env_id is not None, "Internal error: env_id is None"
+            assert session.env_dir is not None, "Internal error: env_dir is None"
+
+            client = await get_session_client(
+                env_id=session.env_id,
+                env_dir=session.env_dir,
+                session_id=session.ce_session_id,
+                create_if_not_exists=False,
+            )
+            await client.stop()
+
         del self.sessions[sid]
 
     async def on_user_query(self, sid, user_query: str):
@@ -111,4 +133,7 @@ class SciMateAgentApp:
         session.state = "idle"
 
     async def stop(self):
-        ...
+        for sid in self.sessions.keys():
+            await self.sio.disconnect(sid)
+
+        await self.sio.shutdown()

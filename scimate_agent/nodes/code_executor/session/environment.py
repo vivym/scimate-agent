@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -7,7 +8,7 @@ import sys
 from ast import literal_eval
 from typing import Any, Callable, Literal, Union
 
-from jupyter_client.blocking.client import BlockingKernelClient
+from jupyter_client.asynchronous.client import AsyncKernelClient
 from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
 from jupyter_client.manager import KernelManager
 from jupyter_client.multikernelmanager import MultiKernelManager
@@ -79,7 +80,7 @@ class Environment:
         os.makedirs(session_dir, exist_ok=True)
         return session_dir
 
-    def start_session(
+    async def start_session(
         self,
         session_id: str,
         session_dir: str | None = None,
@@ -116,17 +117,17 @@ class Environment:
             }
         )
 
-        session.kernel_id = self.kernel_manager.start_kernel(
+        session.kernel_id = await self.kernel_manager._async_start_kernel(
             kernel_id=new_kernel_id,
             cwd=cwd,
             env=kernel_env,
         )
 
-        self._cmd_session_init(session)
+        await self._cmd_session_init(session)
 
         session.kernel_status = "ready"
 
-    def stop_session(self, session_id: str) -> None:
+    async def stop_session(self, session_id: str) -> None:
         self._cleanup_client(session_id)
 
         session = self._get_session(session_id)
@@ -141,10 +142,10 @@ class Environment:
         try:
             if session.kernel_id is not None:
                 kernel = self.kernel_manager.get_kernel(session.kernel_id)
-                is_alive = kernel.is_alive()
+                is_alive = await kernel._async_is_alive()
                 if is_alive:
-                    kernel.shutdown_kernel(now=True)
-                kernel.cleanup_resources()
+                    await kernel._async_shutdown_kernel(now=True)
+                await kernel._async_cleanup_resources()
         except Exception as e:
             logger.error(f"Failed to stop kernel {session.kernel_id}: {e}")
 
@@ -157,7 +158,7 @@ class Environment:
         # Defer applying session vars until code execution
         session.session_vars.update(vars)
 
-    def execute_code(
+    async def execute_code(
         self,
         session_id: str,
         code: str,
@@ -170,29 +171,29 @@ class Environment:
 
         session.execution_count += 1
         exec_index = session.execution_count
-        self._execute_control_code_on_kernel(
+        await self._execute_control_code_on_kernel(
             session_id=session_id,
             code=f"%_scimate_exec_pre_check {exec_id} {exec_index}",
         )
         # update session vars before execution
         if session.session_vars is not None:
-            self._cmd_update_session_vars(session)
+            await self._cmd_update_session_vars(session)
 
         # execute code on kernel
-        exec_result = self._execute_code_on_kernel(
+        exec_result = await self._execute_code_on_kernel(
             session_id=session_id,
             exec_id=exec_id,
             code=code,
         )
         session.execution_dict[exec_id] = exec_result
-        exec_extra_result = self._execute_control_code_on_kernel(
+        exec_extra_result = await self._execute_control_code_on_kernel(
             session_id=session_id,
             code=f"%_scimate_exec_post_check {exec_id} {exec_index}",
         )
 
         return self._parse_exec_result(exec_result, exec_extra_result["data"], session.cwd)
 
-    def load_plugin(
+    async def load_plugin(
         self,
         session_id: str,
         plugin_name: str,
@@ -206,7 +207,7 @@ class Environment:
         if plugin_name in session.plugins:
             prev_plugin = session.plugins[plugin_name]
             if prev_plugin.loaded:
-                self._cmd_unload_plugin(session, prev_plugin)
+                await self._cmd_unload_plugin(session, prev_plugin)
             del session.plugins[plugin_name]
 
         package_bytes = plugin_loader()
@@ -217,11 +218,11 @@ class Environment:
             package=package_str,
             config=plugin_config,
         )
-        self._cmd_load_plugin(session, plugin)
+        await self._cmd_load_plugin(session, plugin)
         plugin.loaded = True
         session.plugins[plugin_name] = plugin
 
-    def test_plugin(self, session_id: str, plugin_name: str) -> None:
+    async def test_plugin(self, session_id: str, plugin_name: str) -> None:
         session = self._get_session(session_id)
         if session is None:
             raise ValueError(f"Session {session_id} not found")
@@ -229,25 +230,25 @@ class Environment:
             logger.warning(f"Tried to test plugin `{plugin_name}` in session `{session_id}` that is not loaded.")
             return
         plugin = session.plugins[plugin_name]
-        self._cmd_test_plugin(session, plugin)
+        await self._cmd_test_plugin(session, plugin)
 
-    def unload_plugin(self, session_id: str, plugin_name: str) -> None:
+    async def unload_plugin(self, session_id: str, plugin_name: str) -> None:
         session = self._get_session(session_id)
         if session is None:
             raise ValueError(f"Session {session_id} not found")
         if plugin_name in session.plugins:
             plugin = session.plugins[plugin_name]
             if plugin.loaded:
-                self._cmd_unload_plugin(session, plugin)
+                await self._cmd_unload_plugin(session, plugin)
             del session.plugins[plugin_name]
         else:
             logger.warning(f"Tried to unload plugin `{plugin_name}` that is not loaded.")
 
-    def download_file(self, session_id: str, url: str, file_path: str) -> str:
+    async def download_file(self, session_id: str, url: str, file_path: str) -> str:
         session = self._get_session(session_id)
         if session is None:
             raise ValueError(f"Session {session_id} not found")
-        result = self._execute_control_code_on_kernel(
+        result = await self._execute_control_code_on_kernel(
             session_id=session_id,
             code=f"%%_scimate_convert_path\n{file_path}",
             silent=True,
@@ -283,17 +284,17 @@ class Environment:
             f"conn-{session_id}-{kernel_id}.json",
         )
 
-    def _get_client(self, session_id: str) -> BlockingKernelClient:
+    async def _get_client(self, session_id: str) -> AsyncKernelClient:
         session = self._get_session(session_id)
         if session is None:
             raise ValueError(f"Session {session_id} not found")
 
         if session.client is None:
             connection_file = self._get_connection_file(session_id, session.kernel_id)
-            client = BlockingKernelClient(connection_file=connection_file)
+            client = AsyncKernelClient(connection_file=connection_file)
             client.load_connection_file()
 
-            client.wait_for_ready(timeout=30)
+            await client.wait_for_ready(timeout=30)
             client.start_channels()
 
             session.client = client
@@ -309,7 +310,7 @@ class Environment:
             session.client.stop_channels()
             session.client = None
 
-    def _execute_code_on_kernel(
+    async def _execute_code_on_kernel(
         self,
         session_id: str,
         exec_id: str,
@@ -320,20 +321,24 @@ class Environment:
     ) -> ExecutionResultInternal:
         exec_result = ExecutionResultInternal(exec_id=exec_id, code=code, exec_type=exec_type)
 
-        client = self._get_client(session_id)
-        result_msg_id = client.execute(
-            code=code,
-            silent=silent,
-            store_history=store_history,
-            allow_stdin=False,
-            stop_on_error=True,
-        )
+        client = await self._get_client(session_id)
+
+        def execute():
+            return client.execute(
+                code,
+                silent=silent,
+                store_history=store_history,
+                allow_stdin=False,
+                stop_on_error=True,
+            )
+
+        result_msg_id = await asyncio.to_thread(execute)
 
         try:
             # TODO: interrupt kernel if it takes too long
             while True:
                 with time_usage() as time_msg:
-                    message = client.get_iopub_msg(timeout=180)
+                    message = await client.get_iopub_msg(timeout=180)
                 logger.debug(f"Time: {time_msg.total:.2f} \t MsgType: {message['msg_type']} \t Code: {code}")
                 logger.debug(json.dumps(message, indent=2, default=str, ensure_ascii=False))
 
@@ -392,14 +397,14 @@ class Environment:
 
         return exec_result
 
-    def _execute_control_code_on_kernel(
+    async def _execute_control_code_on_kernel(
         self,
         session_id: str,
         code: str,
         silent: bool = False,
         store_history: bool = False,
     ) -> dict[Literal["is_success", "message", "data"], Union[bool, str, Any]]:
-        exec_result = self._execute_code_on_kernel(
+        exec_result = await self._execute_code_on_kernel(
             session_id=session_id,
             exec_id=get_id(prefix="ctl"),
             code=code,
@@ -416,36 +421,36 @@ class Environment:
             raise Exception(result["message"])
         return result
 
-    def _cmd_session_init(self, session: Session) -> None:
-        self._execute_control_code_on_kernel(
+    async def _cmd_session_init(self, session: Session) -> None:
+        await self._execute_control_code_on_kernel(
             session_id=session.session_id,
             code=f"%_scimate_session_init {session.session_id}",
         )
 
-    def _cmd_update_session_vars(self, session: Session) -> None:
-        self._execute_control_code_on_kernel(
+    async def _cmd_update_session_vars(self, session: Session) -> None:
+        await self._execute_control_code_on_kernel(
             session_id=session.session_id,
             code=f"%%_scimate_update_session_vars\n{json.dumps(session.session_vars)}",
         )
 
-    def _cmd_load_plugin(self, session: Session, plugin: Plugin) -> None:
-        self._execute_control_code_on_kernel(
+    async def _cmd_load_plugin(self, session: Session, plugin: Plugin) -> None:
+        await self._execute_control_code_on_kernel(
             session_id=session.session_id,
             code=f"%%_scimate_register_plugin {plugin.name}\n{plugin.package}",
         )
-        self._execute_control_code_on_kernel(
+        await self._execute_control_code_on_kernel(
             session_id=session.session_id,
             code=f"%%_scimate_configure_plugin {plugin.name}\n{json.dumps(plugin.config or {})}",
         )
 
-    def _cmd_test_plugin(self, session: Session, plugin: Plugin) -> None:
-        self._execute_control_code_on_kernel(
+    async def _cmd_test_plugin(self, session: Session, plugin: Plugin) -> None:
+        await self._execute_control_code_on_kernel(
             session_id=session.session_id,
             code=f"%_scimate_test_plugin {plugin.name}",
         )
 
-    def _cmd_unload_plugin(self, session: Session, plugin: Plugin) -> None:
-        self._execute_control_code_on_kernel(
+    async def _cmd_unload_plugin(self, session: Session, plugin: Plugin) -> None:
+        await self._execute_control_code_on_kernel(
             session_id=session.session_id,
             code=f"%_scimate_unload_plugin {plugin.name}",
         )
@@ -471,12 +476,12 @@ class Environment:
 
         for mime_type in exec_result.result.keys():
             if mime_type.startswith("text/"):
-                text_result = exec_result.result[mime_type]
-                try:
-                    parsed_result = literal_eval(text_result)
-                    result.output = parsed_result
-                except Exception:
-                    result.output = text_result
+                # TODO: use logger
+                assert result.output is None, (
+                    "Internal error: exec_result.result contains multiple text/plain outputs:"
+                    f" {exec_result.result}"
+                )
+                result.output = exec_result.result[mime_type]
 
         display_artifact_count = 0
         for display in exec_result.displays:
