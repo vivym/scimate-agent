@@ -206,7 +206,7 @@ async def code_executor_node(state: CodeInterpreterState, config: RunnableConfig
 
     for plugin in state.plugins:
         if plugin.enabled:
-            session_client.load_plugin(
+            await session_client.load_plugin(
                 plugin_name=plugin.name,
                 plugin_loader=plugin.load_plugin_package,
                 plugin_config=plugin.spec.configurations,

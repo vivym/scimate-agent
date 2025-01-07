@@ -277,13 +277,17 @@ def load_plugins(search_paths: list[str | Path]) -> list[PluginEntry]:
     plugins: list[PluginEntry] = []
     for path in search_paths:
         path = Path(path)
-        if path.exists() and (path / "spec.yaml").exists():
-            try:
-                plugin = PluginEntry.from_local_path(path)
-                if plugin:
-                    plugins.append(plugin)
-            except Exception as e:
-                # TODO: Log error
-                print(f"Error loading plugin from {path}: {e}")
+        if not path.exists():
+            continue
+
+        for entry in path.iterdir():
+            if entry.is_dir() and (entry / "spec.yaml").exists():
+                try:
+                    plugin = PluginEntry.from_local_path(entry)
+                    if plugin:
+                        plugins.append(plugin)
+                except Exception as e:
+                    # TODO: Log error
+                    print(f"Error loading plugin from {entry}: {e}")
 
     return plugins

@@ -1,16 +1,16 @@
 from dataclasses import dataclass
-from typing import Any,Literal
+from typing import Any, Literal
 
+from langgraph.types import Command
 from socketio import AsyncServer
 
 from scimate_agent.agent import scimate_agent_graph
 from scimate_agent.event import EventEmitter
-from scimate_agent.interrupt import Interruption
+from scimate_agent.interrupt import ExitCommand, Interruption
 from scimate_agent.nodes.code_executor import get_session_client
-from scimate_agent.nodes.code_executor.code_executor import SESSION_CLIENT_CACHE
-from scimate_agent.state import AgentState, Post, Round
+from scimate_agent.state import AgentState, Post, Round, load_plugins
 
-SessionState = Literal["idle", "running"]
+SessionState = Literal["idle", "running", "interrupted"]
 
 
 @dataclass
@@ -80,8 +80,6 @@ class SciMateAgentApp:
             self.sio.emit("error", "Session is already running")
             return
 
-        session.state = "running"
-
         thread_config = {
             "configurable": {
                 "thread_id": session.session_id,
@@ -94,27 +92,37 @@ class SciMateAgentApp:
 
         event_emitter = EventEmitter.get_instance(session.session_id)
 
-        input_state = AgentState(
-            rounds=[
-                Round.new(
-                    user_query=user_query,
-                    posts=[
-                        Post.new(
-                            send_from="User",
-                            send_to="Planner",
-                            message=user_query,
-                        )
-                    ],
-                )
-            ],
-            plugins=[],
-            env_id=session.env_id,
-            env_dir=session.env_dir,
-            session_id=session.session_id,
-        )
+        if session.state == "interrupted":
+            if user_query == "":
+                graph_input = Command(resume=ExitCommand())
+            else:
+                graph_input = Command(resume=user_query)
+        elif session.state == "idle":
+            graph_input = AgentState(
+                rounds=[
+                    Round.new(
+                        user_query=user_query,
+                        posts=[
+                            Post.new(
+                                send_from="User",
+                                send_to="Planner",
+                                message=user_query,
+                            )
+                        ],
+                    )
+                ],
+                plugins=load_plugins(["scimate_agent/plugins/builtins"]),
+                env_id=session.env_id,
+                env_dir=session.env_dir,
+                session_id=session.session_id,
+            )
+        else:
+            raise ValueError(f"Invalid session state: {session.state}")
+
+        session.state = "running"
 
         async for event in scimate_agent_graph.astream(
-            input=input_state,
+            input=graph_input,
             config=thread_config,
             stream_mode="updates",
             subgraphs=True,
@@ -130,7 +138,10 @@ class SciMateAgentApp:
                         interrupt_event.value.model_dump(mode="json"),
                     )
 
-        session.state = "idle"
+                session.state = "interrupted"
+
+        if session.state == "running":
+            session.state = "idle"
 
     async def stop(self):
         for sid in self.sessions.keys():
