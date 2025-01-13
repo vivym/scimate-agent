@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -23,7 +24,7 @@ class Session:
     state: SessionState
 
 
-class SciMateAgentApp:
+class SciMateAgentWebsocketHandler:
     def __init__(self, sio: AsyncServer):
         self.sio = sio
         self.sessions: dict[str, Session] = {}
@@ -103,6 +104,10 @@ class SciMateAgentApp:
             else:
                 graph_input = Command(resume=user_query)
         elif session.state == "idle":
+            plugins = await asyncio.to_thread(
+                load_plugins, ["scimate_agent/plugins/builtins"]
+            )
+
             graph_input = AgentState(
                 rounds=[
                     Round.new(
@@ -116,7 +121,7 @@ class SciMateAgentApp:
                         ],
                     )
                 ],
-                plugins=load_plugins(["scimate_agent/plugins/builtins"]),
+                plugins=plugins,
                 env_id=session.env_id,
                 env_dir=session.env_dir,
                 session_id=session.session_id,

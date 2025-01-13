@@ -1,1 +1,1 @@
-from .app import SciMateAgentApp
+from .main import combined_asgi_app as app

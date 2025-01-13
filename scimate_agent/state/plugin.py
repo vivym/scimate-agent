@@ -3,11 +3,17 @@ import io
 import json
 import tarfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
+import structlog
 from pydantic import BaseModel, Field
 
 from scimate_agent.utils import read_yaml, write_yaml
+
+if TYPE_CHECKING:
+    from structlog.stdlib import AsyncBoundLogger
+
+logger: "AsyncBoundLogger" = structlog.get_logger()
 
 
 class PluginMetadata(BaseModel):
@@ -287,7 +293,6 @@ def load_plugins(search_paths: list[str | Path]) -> list[PluginEntry]:
                     if plugin:
                         plugins.append(plugin)
                 except Exception as e:
-                    # TODO: Log error
-                    print(f"Error loading plugin from {entry}: {e}")
+                    logger.error("Error loading plugin", path=entry, error=e)
 
     return plugins

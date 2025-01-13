@@ -1,13 +1,13 @@
 import asyncio
 import base64
 import json
-import logging
 import os
 import site
 import sys
 from ast import literal_eval
-from typing import Any, Callable, Literal, Union
+from typing import Any, Callable, Literal, Union, TYPE_CHECKING
 
+import structlog
 from jupyter_client.asynchronous.client import AsyncKernelClient
 from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
 from jupyter_client.manager import KernelManager
@@ -25,7 +25,10 @@ from .common import (
     ResultMimeType,
 )
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from structlog.stdlib import BoundLogger
+
+logger: "BoundLogger" = structlog.get_logger()
 
 
 class KernelSpecProvider(KernelSpecManager):
@@ -72,8 +75,6 @@ class Environment:
             default_kernel_name="scimate",
             kernel_spec_manager=KernelSpecProvider(),
         )
-
-        logger.info(f"Environment initialized with id: {self.env_id}")
 
     def get_default_session_dir(self, session_id: str) -> str:
         session_dir = os.path.join(self.env_dir, "sessions", session_id)
@@ -147,7 +148,7 @@ class Environment:
                     await kernel._async_shutdown_kernel(now=True)
                 await kernel._async_cleanup_resources()
         except Exception as e:
-            logger.error(f"Failed to stop kernel {session.kernel_id}: {e}")
+            await logger.aerror("Failed to stop kernel", kernel_id=session.kernel_id, error=e)
 
         session.kernel_status = "stopped"
 
@@ -227,7 +228,11 @@ class Environment:
         if session is None:
             raise ValueError(f"Session {session_id} not found")
         if plugin_name not in session.plugins:
-            logger.warning(f"Tried to test plugin `{plugin_name}` in session `{session_id}` that is not loaded.")
+            await logger.awarning(
+                "Tried to test plugin that is not loaded",
+                plugin_name=plugin_name,
+                session_id=session_id,
+            )
             return
         plugin = session.plugins[plugin_name]
         await self._cmd_test_plugin(session, plugin)
@@ -242,7 +247,11 @@ class Environment:
                 await self._cmd_unload_plugin(session, plugin)
             del session.plugins[plugin_name]
         else:
-            logger.warning(f"Tried to unload plugin `{plugin_name}` that is not loaded.")
+            await logger.awarning(
+                "Tried to unload plugin that is not loaded",
+                plugin_name=plugin_name,
+                session_id=session_id,
+            )
 
     async def download_file(self, session_id: str, url: str, file_path: str) -> str:
         session = self._get_session(session_id)
@@ -339,8 +348,12 @@ class Environment:
             while True:
                 with time_usage() as time_msg:
                     message = await client.get_iopub_msg(timeout=180)
-                logger.debug(f"Time: {time_msg.total:.2f} \t MsgType: {message['msg_type']} \t Code: {code}")
-                logger.debug(json.dumps(message, indent=2, default=str, ensure_ascii=False))
+                await logger.adebug(
+                    "Kernel message",
+                    time=time_msg.total,
+                    message=message,
+                    code=code,
+                )
 
                 if message["parent_header"]["msg_id"] != result_msg_id:
                     # skip messages not related to the current execution
@@ -357,7 +370,7 @@ class Environment:
                     elif stream_name == "stderr":
                         exec_result.stderr.append(stream_text)
                     else:
-                        logger.warning(f"Unknown stream name: {stream_name}")
+                        await logger.awarning("Unknown stream name", stream_name=stream_name)
                 elif msg_type == "execute_result":
                     exec_result.result = message["content"]["data"]
                 elif msg_type == "error":
@@ -391,7 +404,7 @@ class Environment:
                         )
                     )
                 else:
-                    logger.debug(f"Unhandled message type: {msg_type}")
+                    await logger.adebug("Unhandled message type", msg_type=msg_type)
         finally:
             ...
 
@@ -476,7 +489,6 @@ class Environment:
 
         for mime_type in exec_result.result.keys():
             if mime_type.startswith("text/"):
-                # TODO: use logger
                 assert result.output is None, (
                     "Internal error: exec_result.result contains multiple text/plain outputs:"
                     f" {exec_result.result}"
