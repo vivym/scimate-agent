@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 
+from scimate_agent.config import AgentConfig
 from scimate_agent.event import EventEmitter
 from scimate_agent.plugins import ArtifactType
 from scimate_agent.state import Attachment, AttachmentType, CodeInterpreterState, Post, RoundUpdate
@@ -178,11 +179,16 @@ async def code_executor_node(state: CodeInterpreterState, config: RunnableConfig
 
     code = last_post.message
 
+    agent_config: AgentConfig = config["configurable"]["agent_config"]
+    assert isinstance(agent_config, AgentConfig), (
+        f"Agent config is not an instance of AgentConfig: {type(agent_config)}"
+    )
+
     if state.env_id is None:
         # Initialize session manager and session client from `config`
-        env_id = config["configurable"].get("env_id", None)
-        env_dir = config["configurable"].get("env_dir", None)
-        session_id = config["configurable"].get("session_id", None)
+        env_id = agent_config.env_id
+        env_dir = agent_config.env_dir
+        session_id = agent_config.session_id
         if session_id is None:
             raise ValueError("Session ID is required.")
         session_id = str(session_id)
@@ -201,8 +207,7 @@ async def code_executor_node(state: CodeInterpreterState, config: RunnableConfig
         session_id=session_id,
     )
 
-    event_handle = config["configurable"].get("event_handle", None)
-    event_emitter = EventEmitter.get_instance(event_handle)
+    event_emitter = EventEmitter.get_instance(agent_config.event_handle)
 
     for plugin in state.plugins:
         if plugin.enabled:

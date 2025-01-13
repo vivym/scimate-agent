@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 
+from scimate_agent.config import AgentConfig
 from scimate_agent.event import EventEmitter
 from scimate_agent.state import Attachment, AttachmentType, CodeInterpreterState, Post, RoundUpdate
 
@@ -220,8 +221,12 @@ async def code_verifier_node(state: CodeInterpreterState, config: RunnableConfig
 
     errors = await asyncio.to_thread(apply_code_verification, code)
 
-    event_handle = config["configurable"].get("event_handle", None)
-    event_emitter = EventEmitter.get_instance(event_handle)
+    agent_config: AgentConfig = config["configurable"]["agent_config"]
+    assert isinstance(agent_config, AgentConfig), (
+        f"Agent config is not an instance of AgentConfig: {type(agent_config)}"
+    )
+
+    event_emitter = EventEmitter.get_instance(agent_config.event_handle)
     await event_emitter.emit("cv_result", errors)
 
     self_correction_count = state.self_correction_count

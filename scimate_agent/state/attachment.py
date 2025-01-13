@@ -7,10 +7,10 @@ from pydantic import BaseModel
 
 class AttachmentType(Enum):
     # Planner
+    THOUGHT = "thought"
     INIT_PLAN = "init_plan"
     PLAN = "plan"
     CURRENT_PLAN_STEP = "current_plan_step"
-    REVIEW = "review"
 
     # CodeInterpreter
     PLAN_ENRICHMENT = "plan_enrichment"

@@ -13,6 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
+from scimate_agent.config import AgentConfig
 from scimate_agent.event import EventEmitter
 from scimate_agent.prompts.prompt import get_prompt_template
 from scimate_agent.state import (
@@ -89,11 +90,12 @@ def _get_code_generator_llm(llm_vendor: str, llm_model: str, llm_temperature: fl
     return llm.with_structured_output(CodeGenerationResult, include_raw=True)
 
 
-def get_code_generator_llm(config: RunnableConfig):
-    llm_vendor = config["configurable"].get("llm_vendor", "openai")
-    llm_model = config["configurable"].get("llm_model", "gpt-4o-mini")
-    llm_temperature = config["configurable"].get("llm_temperature", 0)
-    return _get_code_generator_llm(llm_vendor, llm_model, llm_temperature)
+def get_code_generator_llm(config: AgentConfig):
+    return _get_code_generator_llm(
+        config.llm_vendor,
+        config.llm_model,
+        config.llm_temperature,
+    )
 
 
 def format_feedback(post: Post | None) -> str:
@@ -149,13 +151,13 @@ def format_feedback(post: Post | None) -> str:
     return feedback
 
 
-def format_code_generation_requirements(role_name: str, config: RunnableConfig) -> str:
-    allowed_modules = config["configurable"].get("allowed_modules", None)
-    blocked_modules = config["configurable"].get("blocked_modules", None)
-    allowed_functions = config["configurable"].get("allowed_functions", None)
-    blocked_functions = config["configurable"].get("blocked_functions", None)
-    allowed_variables = config["configurable"].get("allowed_variables", None)
-    blocked_variables = config["configurable"].get("blocked_variables", None)
+def format_code_generation_requirements(role_name: str, agent_config: AgentConfig) -> str:
+    allowed_modules = agent_config.allowed_modules
+    blocked_modules = agent_config.blocked_modules
+    allowed_functions = agent_config.allowed_functions
+    blocked_functions = agent_config.blocked_functions
+    allowed_variables = agent_config.allowed_variables
+    blocked_variables = agent_config.blocked_variables
 
     requirements: list[str] = []
 
@@ -212,7 +214,7 @@ def format_code_generation_requirements(role_name: str, config: RunnableConfig) 
 
 def format_conversation(
     rounds: list[Round],
-    config: RunnableConfig,
+    agent_config: AgentConfig,
     plugins: list[PluginEntry] | None = None,
     add_requirements: bool = False,
     summary: str | None = None,
@@ -261,7 +263,7 @@ def format_conversation(
                     message += "\n\n" + get_prompt_template("code_generator_requirements").format(
                         ROLE_NAME=ROLE_NAME,
                         CODE_GENERATION_REQUIREMENTS=format_code_generation_requirements(
-                            ROLE_NAME, config
+                            ROLE_NAME, agent_config
                         ),
                     )
 
@@ -279,7 +281,7 @@ def format_conversation(
                     message += "\n\n" + get_prompt_template("code_generator_requirements").format(
                         ROLE_NAME=ROLE_NAME,
                         CODE_GENERATION_REQUIREMENTS=format_code_generation_requirements(
-                            ROLE_NAME, config
+                            ROLE_NAME, agent_config
                         ),
                     )
 
@@ -312,7 +314,7 @@ def format_conversation(
                     message += "\n\n" + get_prompt_template("code_generator_requirements").format(
                         ROLE_NAME=ROLE_NAME,
                         CODE_GENERATION_REQUIREMENTS=format_code_generation_requirements(
-                            ROLE_NAME, config
+                            ROLE_NAME, agent_config
                         ),
                     )
 
@@ -352,7 +354,7 @@ def format_conversation(
 
 def format_messages(
     rounds: list[Round],
-    config: RunnableConfig,
+    agent_config: AgentConfig,
     plugins: list[PluginEntry] | None = None,
     examples: list[Example] | None = None,
 ) -> list[BaseMessage]:
@@ -370,14 +372,14 @@ def format_messages(
     if examples is not None:
         for example in examples:
             messages += format_conversation(
-                example.rounds, config, plugins=example.plugins, add_requirements=False
+                example.rounds, agent_config, plugins=example.plugins, add_requirements=False
             )
 
     # TODO: compress history rounds if needed
     summary = None
 
     messages += format_conversation(
-        rounds, config, plugins=plugins, add_requirements=True, summary=summary
+        rounds, agent_config, plugins=plugins, add_requirements=True, summary=summary
     )
 
     return messages
@@ -389,17 +391,21 @@ async def code_generator_node(state: CodeInterpreterState, config: RunnableConfi
 
     current_round = rounds[-1]
 
-    messages = format_messages(rounds, config, plugins=state.plugins)
+    agent_config: AgentConfig = config["configurable"]["agent_config"]
+    assert isinstance(agent_config, AgentConfig), (
+        f"Agent config is not an instance of AgentConfig: {type(agent_config)}"
+    )
 
-    llm = get_code_generator_llm(config)
+    messages = format_messages(rounds, agent_config, plugins=state.plugins)
+
+    llm = get_code_generator_llm(agent_config)
     result: dict[Literal["raw", "parsed", "parsing_error"], Any] = await llm.ainvoke(messages)
 
     raw_message: AIMessage = result["raw"]
     cg_result: CodeGenerationResult = result["parsed"]
     parsing_error: BaseException | None = result["parsing_error"]
 
-    event_handle = config["configurable"].get("event_handle", None)
-    event_emitter = EventEmitter.get_instance(event_handle)
+    event_emitter = EventEmitter.get_instance(agent_config.event_handle)
     await event_emitter.emit("cg_result", cg_result.model_dump(mode="json"))
 
     revise_message = None

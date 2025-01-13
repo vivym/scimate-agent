@@ -64,7 +64,7 @@ class ExecutionResult(BaseModel):
     is_success: bool = False
     error: str | None = None
 
-    output: Union[str, list[tuple[str, str]]] | None = None
+    output: Any | None = None
     stdout: list[str] = field(default_factory=list)
     stderr: list[str] = field(default_factory=list)
 

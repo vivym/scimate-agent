@@ -481,7 +481,14 @@ class Environment:
                     "Internal error: exec_result.result contains multiple text/plain outputs:"
                     f" {exec_result.result}"
                 )
-                result.output = exec_result.result[mime_type]
+                text_result = exec_result.result[mime_type]
+                try:
+                    parsed_result = literal_eval(text_result)
+                    # Filter out the `Ellipsis` object, which cannot be JSON serialized
+                    parsed_result = filter_ellipsis(parsed_result)
+                except:
+                    parsed_result = text_result
+                result.output = parsed_result
 
         display_artifact_count = 0
         for display in exec_result.displays:
@@ -531,3 +538,25 @@ class Environment:
                         result.artifacts.append(artifact)
 
         return result
+
+
+def filter_ellipsis(obj: Any) -> Any:
+    """
+    This function is needed because Ellipsis objects cannot be JSON serialized.
+    """
+
+    if isinstance(obj, Ellipsis):
+        return "..."
+    elif isinstance(obj, list):
+        return [filter_ellipsis(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(map(filter_ellipsis, obj))
+    elif isinstance(obj, set):
+        return set(map(filter_ellipsis, obj))
+    elif isinstance(obj, dict):
+        return {
+            filter_ellipsis(key): filter_ellipsis(value)
+            for key, value in obj.items()
+        }
+    else:
+        return obj

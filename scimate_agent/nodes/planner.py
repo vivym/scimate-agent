@@ -13,6 +13,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END
 from pydantic import BaseModel, Field
 
+from scimate_agent.config import AgentConfig
 from scimate_agent.event import EventEmitter
 from scimate_agent.prompts import get_prompt_template
 from scimate_agent.state import (
@@ -28,6 +29,13 @@ from scimate_agent.utils.env import get_env_context
 
 
 class Plan(BaseModel):
+    thought: str = Field(
+        description=(
+            "The reasoning of the Planner's decision. It should include the analysis of the User's request, "
+            "the Workers' responses, and the current environment context."
+        )
+    )
+
     init_plan: str = Field(
         description=(
             "The initial plan to decompose the User's task into subtasks and list them as the detailed subtask steps. "
@@ -46,13 +54,6 @@ class Plan(BaseModel):
         description="The current step Planner is executing."
     )
 
-    review: str = Field(
-        description=(
-            "The review of the current step. If the Worker's response is incorrect or incomplete, "
-            "Planner should provide feedback to the Worker."
-        )
-    )
-
     send_to: str = Field(
         description="The name of character (User or name of the Worker) that Planner wants to speak to."
     )
@@ -68,6 +69,10 @@ class Plan(BaseModel):
     ) -> Post:
         attachments = [
             Attachment.new(
+                type=AttachmentType.THOUGHT,
+                content=self.thought,
+            ),
+            Attachment.new(
                 type=AttachmentType.INIT_PLAN,
                 content=self.init_plan,
             ),
@@ -78,10 +83,6 @@ class Plan(BaseModel):
             Attachment.new(
                 type=AttachmentType.CURRENT_PLAN_STEP,
                 content=self.current_plan_step,
-            ),
-            Attachment.new(
-                type=AttachmentType.REVIEW,
-                content=self.review,
             ),
         ]
 
@@ -111,11 +112,12 @@ def _get_planner_llm(llm_vendor: str, llm_model: str, llm_temperature: float):
     return llm.with_structured_output(Plan, include_raw=True)
 
 
-def get_planner_llm(config: RunnableConfig):
-    llm_vendor = config["configurable"].get("llm_vendor", "openai")
-    llm_model = config["configurable"].get("llm_model", "gpt-4o-mini")
-    llm_temperature = config["configurable"].get("llm_temperature", 0)
-    return _get_planner_llm(llm_vendor, llm_model, llm_temperature)
+def get_planner_llm(agent_config: AgentConfig):
+    return _get_planner_llm(
+        agent_config.llm_vendor,
+        agent_config.llm_model,
+        agent_config.llm_temperature,
+    )
 
 
 def format_messages(rounds: list[Round], plugins: list[PluginEntry]) -> list[BaseMessage]:
@@ -172,15 +174,19 @@ async def planner_node(state: AgentState, config: RunnableConfig):
 
     messages = format_messages(rounds, state.plugins)
 
-    llm = get_planner_llm(config)
+    agent_config: AgentConfig = config["configurable"]["agent_config"]
+    assert isinstance(agent_config, AgentConfig), (
+        f"Agent config is not an instance of AgentConfig: {type(agent_config)}"
+    )
+
+    llm = get_planner_llm(agent_config)
     result: dict[Literal["raw", "parsed", "parsing_error"], Any] = await llm.ainvoke(messages)
 
     raw_message: AIMessage = result["raw"]
     plan: Plan = result["parsed"]
     parsing_error: BaseException | None = result["parsing_error"]
 
-    event_handle = config["configurable"].get("event_handle", None)
-    event_emitter = EventEmitter.get_instance(event_handle)
+    event_emitter = EventEmitter.get_instance(agent_config.event_handle)
     await event_emitter.emit("planner_result", plan.model_dump(mode="json"))
 
     revise_message = None

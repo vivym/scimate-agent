@@ -5,6 +5,7 @@ from langgraph.types import Command
 from socketio import AsyncServer
 
 from scimate_agent.agent import scimate_agent_graph
+from scimate_agent.config import AgentConfig
 from scimate_agent.event import EventEmitter
 from scimate_agent.interrupt import ExitCommand, Interruption
 from scimate_agent.nodes.code_executor import get_session_client
@@ -83,10 +84,14 @@ class SciMateAgentApp:
         thread_config = {
             "configurable": {
                 "thread_id": session.session_id,
-                "env_id": session.env_id,
-                "env_dir": session.env_dir,
-                "session_id": session.session_id,
-                "event_handle": session.session_id,
+                "agent_config": AgentConfig(
+                    llm_vendor="openai",
+                    llm_model="gpt-4o",
+                    event_handle=session.session_id,
+                    env_id=session.env_id,
+                    env_dir=session.env_dir,
+                    session_id=session.session_id,
+                ),
             }
         }
 

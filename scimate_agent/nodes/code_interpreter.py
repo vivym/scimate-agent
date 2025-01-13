@@ -3,7 +3,15 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from scimate_agent.state import AgentState, CodeInterpreterState, Round, RoundUpdate
+from scimate_agent.config import AgentConfig
+from scimate_agent.state import (
+    AgentState,
+    Attachment,
+    AttachmentType,
+    CodeInterpreterState,
+    Round,
+    RoundUpdate,
+)
 
 
 async def code_interpreter_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
@@ -22,6 +30,16 @@ async def code_interpreter_node(state: AgentState, config: RunnableConfig) -> di
     new_post = current_post.model_copy()
     new_post.send_to = "CodeGenerator"
 
+    plan_list = current_post.get_attachments(AttachmentType.PLAN)
+    assert len(plan_list) == 1, "Invalid post, plan must be a single attachment."
+    plan = plan_list[0]
+    new_post.attachments = new_post.attachments + [
+        Attachment.new(
+            type=AttachmentType.PLAN_ENRICHMENT,
+            content=f"\n====== Plan ======\nI have drawn up a plan:\n{plan.content}\n==================\n",
+        )
+    ]
+
     ci_state = CodeInterpreterState(
         rounds=[
             Round.new(
@@ -38,11 +56,16 @@ async def code_interpreter_node(state: AgentState, config: RunnableConfig) -> di
 
     from scimate_agent.agent import code_interpreter_graph
 
+    agent_config: AgentConfig = config["configurable"]["agent_config"]
+    assert isinstance(agent_config, AgentConfig), (
+        f"Agent config is not an instance of AgentConfig: {type(agent_config)}"
+    )
+
     subgraph_thread_id = str(config["configurable"]["thread_id"]) + "-ci"
     subgraph_config = {
         "configurable": {
-            **config["configurable"],
             "thread_id": subgraph_thread_id,
+            "agent_config": agent_config,
         }
     }
 
